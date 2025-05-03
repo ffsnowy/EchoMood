@@ -116,11 +116,29 @@ if st.session_state.page == "mood_and_genre":
     if not data:
         st.warning("No music fetched yet — please hit 'Fetch Music' above.")
     else:
-        # Get Spotify Genres (these are valid genres)
-        spotify_genres = sp.recommendation_genre_seeds()['genres']
-        
         # Genre Selection
         st.header("🎼 Choose Genres for Your Mood")
+        spotify_genres = [
+            "acoustic", "afrobeat", "alt-rock", "alternative", "ambient", "black-metal", 
+            "bluegrass", "blues", "bossanova", "brazil", "breakbeat", "british", "cantopop", 
+            "chicago-house", "children", "chill", "classical", "club", "comedy", "country", 
+            "dance", "dancehall", "death-metal", "deep-house", "detroit-techno", "disco", 
+            "disney", "drum-and-bass", "dub", "dubstep", "edm", "electro", "electronic", 
+            "emo", "folk", "forro", "french", "funk", "garage", "german", "gospel", "goth", 
+            "grindcore", "groove", "grunge", "guitar", "happy", "hard-rock", "hardcore", 
+            "hardstyle", "heavy-metal", "hip-hop", "holidays", "honky-tonk", "house", "idm", 
+            "indian", "indie", "indie-pop", "industrial", "iranian", "j-dance", "j-idol", 
+            "j-pop", "j-rock", "jazz", "k-pop", "kids", "latin", "latino", "malay", "mandopop", 
+            "metal", "metalcore", "minimal-techno", "movies", "mpb", "new-age", "new-release", 
+            "opera", "pagode", "party", "philippines-opm", "piano", "pop", "pop-film", "post-dubstep", 
+            "power-pop", "progressive-house", "psych-rock", "punk", "punk-rock", "r-n-b", "rainy-day", 
+            "reggae", "reggaeton", "road-trip", "rock", "rock-n-roll", "rockabilly", "romance", 
+            "sad", "salsa", "samba", "sertanejo", "show-tunes", "singer-songwriter", "ska", 
+            "sleep", "songwriter", "soul", "soundtracks", "spanish", "study", "summer", 
+            "swedish", "synth-pop", "tango", "techno", "trance", "trip-hop", "turkish", 
+            "work-out", "world-music"
+            ]
+        
         selected_genres = st.multiselect(
             "Pick the genres you're in the mood for:",
             spotify_genres,
@@ -160,12 +178,9 @@ if st.session_state.page == "mood_and_genre":
             }
             st.session_state.selected_familiarity = familiarity
 
-            # Filter music based on genre
-            filtered_data = [track for track in data if any(genre in track['track']['genres'] for genre in selected_genres)]
-
             # Filter music based on familiarity score
             familiarity_threshold = (familiarity / 100) * 100  # Convert slider to a percentage
-            filtered_data = [track for track in filtered_data if track['familiarity_score'] >= familiarity_threshold]
+            filtered_data = [track for track in data if track['familiarity_score'] >= familiarity_threshold]
 
             # Optionally, you can add more filtering logic here to match other moods and genres as well.
 
@@ -187,7 +202,7 @@ if st.session_state.page == "playlist_details":
             new_playlist = sp.user_playlist_create(user_id, playlist_name, public=False)  # Create the playlist on Spotify
             playlist_id = new_playlist['id']
 
-            # Get the filtered tracks (based on familiarity and genre)
+            # Get the filtered tracks (based on familiarity)
             track_ids = [track['track']['id'] for track in st.session_state.filtered_music_data[:num_songs]]
 
             # Add the tracks to the new playlist
@@ -203,10 +218,12 @@ if st.session_state.page == "playlist_details":
 
             st.rerun()
 
-# Show created playlist details
+# Playlist Created Confirmation
 if st.session_state.page == "playlist_created":
-    st.header("✅ Playlist Created Successfully!")
-    st.write(f"Your playlist **{st.session_state.playlist_name}** with **{st.session_state.num_songs}** songs has been created and saved to your Spotify account!")
+    st.success(f"🎶 Your playlist '{st.session_state.playlist_name}' has been successfully saved!")
+    st.button("Go Back to Start")
+    st.session_state.page = "fetch_music"
+    st.rerun()
 
 
 # ---------------------------------------------------
