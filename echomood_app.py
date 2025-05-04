@@ -3,6 +3,20 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import random
 
+
+# Function to fetch available genres from Spotify
+def get_spotify_genres():
+    try:
+        genres = sp.recommendation_genre_seeds()
+        return genres['genres']  # This will return a list of genre names
+    except spotipy.exceptions.SpotifyException as e:
+        st.error(f"Spotify API error: {e}")
+        return []
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
+        return []
+
+
 # Spotify Authentication
 sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
     client_id="50c0b9c6df1c43db8866ec8e019f4e96",
@@ -111,6 +125,19 @@ if st.session_state.page == "fetch_music":
 
 # Genre and Mood Selection (with Familiarity slider)
 if st.session_state.page == "mood_and_genre":
+    # Fetch available genres from Spotify
+    spotify_genres = get_spotify_genres()
+
+    if not spotify_genres:
+        st.warning("Couldn't fetch genres from Spotify. Please try again later.")
+    else:
+        selected_genres = st.multiselect(
+            "Pick the genres you're in the mood for:",
+            spotify_genres,  # Use the fetched list of genres
+            default=["chill", "pop", "indie"]  # Default genres
+        )
+
+        st.info(f"You've selected: {', '.join(selected_genres)}")
     # Display fetched music data
     data = st.session_state.get('music_data', [])
     if not data:
