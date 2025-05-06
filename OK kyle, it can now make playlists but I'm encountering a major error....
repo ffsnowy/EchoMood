@@ -1,0 +1,3 @@
+I want to fetch genres from the Spotify API, which apparently I can (according to chatGPT), however when I run the code GPT has provided for me, it always returns 404 error not found. It would be best if I could fetch the genres of the music from Spotify so when the user selects which genres they want to listen to, it will match with what Spotify thinks is in each genre.
+
+The second issue is that the API cannot fetch listening times to I will struggle with "familiarity" as it won't be able to be as accurate as before. Any solutions?
