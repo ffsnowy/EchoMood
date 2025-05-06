@@ -142,7 +142,7 @@ if st.session_state.page == "mood_and_genre":
     # Fetch available genres from Spotify
 
     if not spotify_genres:
-    st.warning("Couldn't fetch genres from Spotify. Please try again later.")
+        st.warning("Couldn't fetch genres from Spotify. Please try again later.")
 else:
     # Genre Selection
     st.header("🎼 Choose Genres for Your Mood")
