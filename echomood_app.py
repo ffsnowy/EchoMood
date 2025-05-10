@@ -3,25 +3,57 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import random
 
-# Spotify Authentication
-sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
-    client_id="50c0b9c6df1c43db8866ec8e019f4e96",
-    client_secret="64f63986097447d0a9f0481e9166b7e4",
-    redirect_uri="http://127.0.0.1:5000/callback", 
-    scope=["user-library-read", "playlist-modify-public", "playlist-modify-private"]
-))
+# Function to get Spotify client
+@st.cache_resource
+def get_spotify_client():
+    auth_manager = SpotifyOAuth(
+        client_id="50c0b9c6df1c43db8866ec8e019f4e96",
+        client_secret="64f63986097447d0a9f0481e9166b7e4",
+        redirect_uri="http://127.0.0.1:5000/callback",
+        scope=["user-library-read", "playlist-modify-public", "playlist-modify-private"],
+        open_browser=False,
+        cache_path=".cache"
+    )
 
+    # If no token is cached, stop and ask user to log in
+    if not auth_manager.get_cached_token():
+        st.markdown("### 🔐 You need to log in with Spotify first.")
+        st.markdown("[Click here to log in with Spotify](http://127.0.0.1:5000)")
+        st.stop()
 
+    try:
+        token_info = auth_manager.get_access_token(as_dict=True)
+        access_token = token_info['access_token']
+    except Exception as e:
+        st.error(f"Could not authenticate with Spotify: {e}")
+        st.stop()
+
+    return spotipy.Spotify(auth=access_token)
+
+# Function to get genres from Spotify
 def get_spotify_genres():
     try:
+        sp = get_spotify_client()
         return sp.recommendation_genre_seeds()['genres']
     except Exception as e:
         st.error(f"Error fetching genres: {e}")
         return []
 
-# Genre Selection (dynamically using genres from Spotify)
+# Get the Spotify client now
+sp = get_spotify_client()
+
+
+
+
+# Initialize session state
+if "page" not in st.session_state:
+    st.session_state.page = "fetch_music"
+
+
+
+# Genre and Mood Selection (with Familiarity slider)
 if st.session_state.page == "mood_and_genre":
-    # Fetch available genres from Spotify
+    # Always fetch genres safely
     spotify_genres = get_spotify_genres()
 
     if not spotify_genres:
@@ -29,11 +61,11 @@ if st.session_state.page == "mood_and_genre":
     else:
         selected_genres = st.multiselect(
             "Pick the genres you're in the mood for:",
-            spotify_genres,  # Use the fetched list of genres
-            default=["chill", "pop", "indie"]  # Default genres
+            spotify_genres,
+            default=["chill", "pop", "indie"]
         )
-
         st.info(f"You've selected: {', '.join(selected_genres)}")
+
 
 
 # Custom CSS Styles
@@ -72,6 +104,7 @@ def calculate_familiarity(track):
 
 # Function to fetch music data from Spotify (Similar to previous)
 def get_spotify_data(fetch_type, playlist_url=None):
+    sp = get_spotify_client()
     results = []
     offset = 0
 
@@ -100,9 +133,6 @@ def get_spotify_data(fetch_type, playlist_url=None):
 st.title("🎧 EchoMood")
 st.subheader("Discover the rhythm of your soul with EchoMood 🎶")
 
-# Initial state settings
-if "page" not in st.session_state:
-    st.session_state.page = "fetch_music"
 
 # Fetch music data (Liked Songs or Playlist)
 if st.session_state.page == "fetch_music":
@@ -139,36 +169,24 @@ if st.session_state.page == "fetch_music":
 
 # Genre and Mood Selection (with Familiarity slider)
 if st.session_state.page == "mood_and_genre":
-    # Fetch available genres from Spotify
+    # Fetch genres from Spotify only if they are not already in session state
+    if "spotify_genres" not in st.session_state:
+        st.session_state.spotify_genres = get_spotify_genres()
+
+    spotify_genres = st.session_state.spotify_genres  # Retrieve the cached genres
 
     if not spotify_genres:
         st.warning("Couldn't fetch genres from Spotify. Please try again later.")
-else:
-    # Genre Selection
-    st.header("🎼 Choose Genres for Your Mood")
-    selected_genres = st.multiselect(
-        "Pick the genres you're in the mood for:",
-        spotify_genres,
-        default=[g for g in ["chill", "pop", "indie"] if g in spotify_genres]
-    )
-    st.info(f"You've selected: {', '.join(selected_genres)}")
-
-
-
-    # Display fetched music data
-    data = st.session_state.get('music_data', [])
-    if not data:
-        st.warning("No music fetched yet — please hit 'Fetch Music' above.")
     else:
-        # Genre Selection
+        # The rest of your genre selection code goes here
         st.header("🎼 Choose Genres for Your Mood")
         selected_genres = st.multiselect(
             "Pick the genres you're in the mood for:",
             spotify_genres,
             default=[g for g in ["chill", "pop", "indie"] if g in spotify_genres]
         )
-
         st.info(f"You've selected: {', '.join(selected_genres)}")
+
 
         # Mood Sliders
         st.header("🧠 Refine Your Mood")
@@ -187,6 +205,7 @@ else:
             liveness = st.slider("Liveness", 0.0, 1.0, 0.2, step=0.01)
 
         # Familiarity Slider
+        st.header("Exploration Dial")
         familiarity = st.slider("How familiar do you want your music to be?", 0, 100, 50)
 
         if st.button("Confirm Mood and Genre"):
@@ -213,6 +232,19 @@ else:
 
 # Playlist Details and Playlist Generation
 if st.session_state.page == "playlist_details":
+    # Display fetched music data
+    data = st.session_state.get('music_data', [])
+    if not data:
+        st.warning("No music fetched yet — please hit 'Fetch Music' above.")
+    else:
+        # If music data is available, display the filtered data
+        filtered_data = st.session_state.get('filtered_music_data', [])
+        if filtered_data:
+            for track in filtered_data:
+                st.write(f"Track: {track['name']} - Artist: {track['artist']}")
+        else:
+            st.warning("No tracks match your selected criteria.")
+    
     if "filtered_music_data" not in st.session_state or not st.session_state.filtered_music_data:
         st.warning("No music data found. Please go back and select your mood and genre first.")
         if st.button("Go Back"):
@@ -227,6 +259,7 @@ if st.session_state.page == "playlist_details":
         if st.button("Generate Playlist"):
             # Create a playlist
             if playlist_name:
+                sp = get_spotify_client()
                 user_id = sp.current_user()['id']
                 new_playlist = sp.user_playlist_create(user_id, playlist_name, public=False)  # Create the playlist on Spotify
                 playlist_id = new_playlist['id']
