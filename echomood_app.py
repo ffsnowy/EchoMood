@@ -51,8 +51,8 @@ def get_spotify_credentials():
     """Get Spotify credentials from environment variables or Streamlit secrets."""
     try:
         # Try environment variables first
-        client_id = os.getenv("50c0b9c6df1c43db8866ec8e019f4e96")
-        client_secret = os.getenv("64f63986097447d0a9f0481e9166b7e4")
+        client_id = "50c0b9c6df1c43db8866ec8e019f4e96"
+        client_secret = "64f63986097447d0a9f0481e9166b7e4"
         
         # If not found, try Streamlit secrets
         if not client_id or not client_secret:
@@ -772,3 +772,5 @@ if __name__ == "__main__":
 # cd Documents\EchoMood
 # .\venv\Scripts\Activate
 # streamlit run echomood_app.py
+#client_id = "50c0b9c6df1c43db8866ec8e019f4e96"
+#client_secret = "64f63986097447d0a9f0481e9166b7e4
