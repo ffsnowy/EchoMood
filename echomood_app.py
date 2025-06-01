@@ -37,7 +37,7 @@ initialize_session_state()
 
 # Configuration
 class Config:
-    REDIRECT_URI = "http://127.0.0.1:8501/callback"
+    REDIRECT_URI = "https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app"
     CACHE_PATH = ".cache"
     SCOPES = [
         "user-library-read",
@@ -86,13 +86,23 @@ def get_spotify_client():
     try:
         client_id, client_secret = get_spotify_credentials()
         
+        # Detect if we're running locally or deployed
+        is_local = "localhost" in st.get_option("server.headless") or "127.0.0.1" in str(st.get_option("server.headless"))
+        
+        # Use different redirect URI based on environment
+        if is_local:
+            redirect_uri = "http://localhost:8501/"
+        else:
+            redirect_uri = Config.REDIRECT_URI
+        
         auth_manager = SpotifyOAuth(
             client_id=client_id,
             client_secret=client_secret,
-            redirect_uri=Config.REDIRECT_URI,
-            scope=Config.SCOPES,
-            open_browser=True,
-            cache_path=Config.CACHE_PATH
+            redirect_uri=redirect_uri,
+            scope=" ".join(Config.SCOPES),  # Join scopes as string
+            open_browser=False,  # Always False for web apps
+            cache_path=Config.CACHE_PATH,
+            show_dialog=True  # Force login dialog
         )
 
         token_info = auth_manager.get_cached_token()
@@ -101,11 +111,30 @@ def get_spotify_client():
             query_params = st.query_params
             if "code" in query_params:
                 code = query_params["code"]
-                token_info = auth_manager.get_access_token(code)
+                try:
+                    token_info = auth_manager.get_access_token(code)
+                except Exception as e:
+                    st.error(f"Authentication failed: {e}")
+                    st.info("Please try the authentication process again.")
+                    auth_url = auth_manager.get_authorize_url()
+                    st.markdown(f"[🔐 Click here to log in to Spotify]({auth_url})")
+                    st.stop()
             else:
                 st.markdown("### 🔐 Please log in to Spotify")
                 auth_url = auth_manager.get_authorize_url()
-                st.markdown(f"[Click here to log in to Spotify]({auth_url})")
+                st.markdown(f"""
+                <div style="text-align: center; padding: 20px;">
+                    <a href="{auth_url}" target="_self" style="
+                        background: linear-gradient(45deg, #1DB954, #1ed760);
+                        color: white;
+                        padding: 12px 24px;
+                        text-decoration: none;
+                        border-radius: 25px;
+                        font-weight: bold;
+                        display: inline-block;
+                    ">🎵 Connect to Spotify</a>
+                </div>
+                """, unsafe_allow_html=True)
                 st.info("After logging in, you'll be redirected back to this app.")
                 st.stop()
 
@@ -114,6 +143,12 @@ def get_spotify_client():
     except Exception as e:
         st.error(f"Failed to authenticate with Spotify: {e}")
         st.write("Please check your credentials and try again.")
+        
+        # Option to clear cache and retry
+        if st.button("🔄 Clear Cache and Retry"):
+            if os.path.exists(Config.CACHE_PATH):
+                os.remove(Config.CACHE_PATH)
+            st.rerun()
         st.stop()
 
 def calculate_real_familiarity(track_id, sp):
@@ -774,3 +809,5 @@ if __name__ == "__main__":
 # streamlit run echomood_app.py
 #client_id = "50c0b9c6df1c43db8866ec8e019f4e96"
 #client_secret = "64f63986097447d0a9f0481e9166b7e4
+
+#https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app
