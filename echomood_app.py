@@ -123,38 +123,39 @@ def get_spotify_client():
         st.write("Please check your credentials and try again.")
         st.stop()
     
-def calculate_real_familiarity(track_id, sp):
-    """Calculate familiarity score based on actual listening history."""
+def calculate_real_familiarity_batch(track_ids, sp):
+    """Calculate familiarity scores for multiple tracks efficiently."""
     try:
-        # Get recently played tracks (last 50)
+        # Get recently played tracks once
         recent_tracks = sp.current_user_recently_played(limit=50)
+        recent_track_ids = [item['track']['id'] for item in recent_tracks['items']]
+        recent_counts = Counter(recent_track_ids)
         
-        # Count how many times this track appears in recent history
-        play_count = sum(1 for item in recent_tracks['items'] 
-                        if item['track']['id'] == track_id)
-        
-        # Get user's top tracks to see if this is a favorite
+        # Get top tracks once
+        top_track_ids = set()
         try:
-            top_tracks_short = sp.current_user_top_tracks(time_range='short_term', limit=50)
-            top_tracks_medium = sp.current_user_top_tracks(time_range='medium_term', limit=50)
-            
-            is_top_track = any(track['id'] == track_id 
-                             for track in top_tracks_short['items'] + top_tracks_medium['items'])
-            
-            # Calculate familiarity score (0-100)
-            base_score = min(play_count * 15, 60)  # Recent plays worth up to 60 points
-            top_bonus = 40 if is_top_track else 0  # Top tracks get 40 bonus points
-            
-            return min(base_score + top_bonus, 100)
-            
+            for time_range in ['short_term', 'medium_term']:
+                top_tracks = sp.current_user_top_tracks(time_range=time_range, limit=50)
+                top_track_ids.update(track['id'] for track in top_tracks['items'])
         except Exception:
-            # If top tracks fails, just use play count
-            return min(play_count * 20, 100)
-            
+            pass  # Continue without top tracks if it fails
+        
+        # Calculate scores for all tracks
+        familiarity_scores = {}
+        for track_id in track_ids:
+            play_count = recent_counts.get(track_id, 0)
+            base_score = min(play_count * 15, 60)
+            top_bonus = 40 if track_id in top_track_ids else 0
+            familiarity_scores[track_id] = min(base_score + top_bonus, 100)
+        
+        return familiarity_scores
+        
     except Exception as e:
-        logger.warning(f"Could not calculate familiarity for track {track_id}: {e}")
-        # Return random score as fallback (for demo purposes)
-        return random.randint(0, 100)
+        logger.warning(f"Could not calculate familiarity batch: {e}")
+        # Return random scores as fallback
+        return {track_id: random.randint(0, 100) for track_id in track_ids}
+
+
 
 def get_spotify_genres_from_tracks(tracks, sp):
     """Fetch genres from tracks' artists."""
@@ -383,16 +384,21 @@ def render_fetch_music_page():
                 st.error("No music data could be fetched. Please try again.")
                 return
 
-            progress_bar.progress(90, text="Calculating familiarity scores...")
+            progress_bar.progress(80, text="Calculating familiarity scores...")
             
             sp = get_spotify_client()
             
-            # Add familiarity scores
-            for i, track in enumerate(data):
-                track['familiarity_score'] = calculate_real_familiarity(track['track']['id'], sp)
-                if i % 10 == 0:  # Update progress every 10 tracks
-                    progress = 90 + int((i / len(data)) * 10)
-                    progress_bar.progress(progress, text=f"Analyzing familiarity... ({i+1}/{len(data)})")
+            # Get all track IDs at once
+            track_ids = [track['track']['id'] for track in data if track.get('track', {}).get('id')]
+            
+            # Calculate familiarity scores in batch
+            familiarity_scores = calculate_real_familiarity_batch(track_ids, sp)
+            
+            # Assign scores to tracks
+            for track in data:
+                track_id = track.get('track', {}).get('id')
+                if track_id:
+                    track['familiarity_score'] = familiarity_scores.get(track_id, 0)
 
             progress_bar.progress(100, text="Complete!")
             
