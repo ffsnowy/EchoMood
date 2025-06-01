@@ -9,6 +9,8 @@ import time
 import os
 from datetime import datetime, timedelta
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +28,8 @@ def initialize_session_state():
         "selected_familiarity": 50,
         "filtered_music_data": [],
         "playlist_name": "",
-        "spotify_client": None
+        "spotify_client": None,
+        "user_listening_data": None  # Cache user data
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -122,42 +125,111 @@ def get_spotify_client():
         st.error(f"Failed to authenticate with Spotify: {e}")
         st.write("Please check your credentials and try again.")
         st.stop()
-    
-def calculate_real_familiarity(track_id, sp):
-    """Calculate familiarity score based on actual listening history."""
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_user_listening_data(sp_token):
+    """Get user's listening data once and cache it."""
     try:
+        # Create a new client instance for this cached function
+        sp = spotipy.Spotify(auth=sp_token)
+        
+        listening_data = {
+            'recent_tracks': {},
+            'top_tracks_short': set(),
+            'top_tracks_medium': set()
+        }
+        
         # Get recently played tracks (last 50)
-        recent_tracks = sp.current_user_recently_played(limit=50)
+        try:
+            recent_tracks = sp.current_user_recently_played(limit=50)
+            recent_track_counts = Counter()
+            for item in recent_tracks['items']:
+                if item['track'] and item['track'].get('id'):
+                    recent_track_counts[item['track']['id']] += 1
+            listening_data['recent_tracks'] = dict(recent_track_counts)
+        except Exception as e:
+            logger.warning(f"Could not fetch recent tracks: {e}")
         
-        # Count how many times this track appears in recent history
-        play_count = sum(1 for item in recent_tracks['items'] 
-                        if item['track']['id'] == track_id)
-        
-        # Get user's top tracks to see if this is a favorite
+        # Get top tracks
         try:
             top_tracks_short = sp.current_user_top_tracks(time_range='short_term', limit=50)
+            listening_data['top_tracks_short'] = {track['id'] for track in top_tracks_short['items']}
+            
             top_tracks_medium = sp.current_user_top_tracks(time_range='medium_term', limit=50)
-            
-            is_top_track = any(track['id'] == track_id 
-                             for track in top_tracks_short['items'] + top_tracks_medium['items'])
-            
-            # Calculate familiarity score (0-100)
-            base_score = min(play_count * 15, 60)  # Recent plays worth up to 60 points
-            top_bonus = 40 if is_top_track else 0  # Top tracks get 40 bonus points
-            
-            return min(base_score + top_bonus, 100)
-            
-        except Exception:
-            # If top tracks fails, just use play count
-            return min(play_count * 20, 100)
-            
+            listening_data['top_tracks_medium'] = {track['id'] for track in top_tracks_medium['items']}
+        except Exception as e:
+            logger.warning(f"Could not fetch top tracks: {e}")
+        
+        return listening_data
+        
     except Exception as e:
-        logger.warning(f"Could not calculate familiarity for track {track_id}: {e}")
-        # Return random score as fallback (for demo purposes)
-        return random.randint(0, 100)
+        logger.warning(f"Could not get user listening data: {e}")
+        return {
+            'recent_tracks': {},
+            'top_tracks_short': set(),
+            'top_tracks_medium': set()
+        }
+
+def calculate_real_familiarity_batch(track_ids, sp):
+    """Calculate familiarity scores for multiple tracks efficiently."""
+    try:
+        # Get recently played tracks once
+        recent_tracks = sp.current_user_recently_played(limit=50)
+        recent_track_ids = [item['track']['id'] for item in recent_tracks['items']]
+        recent_counts = Counter(recent_track_ids)
+        
+        # Get top tracks once
+        top_track_ids = set()
+        try:
+            for time_range in ['short_term', 'medium_term']:
+                top_tracks = sp.current_user_top_tracks(time_range=time_range, limit=50)
+                top_track_ids.update(track['id'] for track in top_tracks['items'])
+        except Exception:
+            pass  # Continue without top tracks if it fails
+        
+        # Calculate scores for all tracks
+        familiarity_scores = {}
+        for track_id in track_ids:
+            play_count = recent_counts.get(track_id, 0)
+            base_score = min(play_count * 15, 60)
+            top_bonus = 40 if track_id in top_track_ids else 0
+            familiarity_scores[track_id] = min(base_score + top_bonus, 100)
+        
+        return familiarity_scores
+        
+    except Exception as e:
+        logger.warning(f"Could not calculate familiarity batch: {e}")
+        # Return random scores as fallback
+        return {track_id: random.randint(0, 100) for track_id in track_ids}
+    
+
+
+
+def calculate_familiarity_batch(tracks, listening_data, progress_callback=None):
+    """Calculate familiarity for all tracks using cached data - much faster!"""
+    results = []
+    total = len(tracks)
+    
+    for i, track in enumerate(tracks):
+        track_id = track['track']['id'] if track.get('track', {}).get('id') else None
+        
+        if track_id:
+            familiarity = calculate_familiarity_fast(track_id, listening_data)
+        else:
+            familiarity = 0
+            
+        track['familiarity_score'] = familiarity
+        results.append(track)
+        
+        # Update progress less frequently for better performance
+        if progress_callback and i % 20 == 0:
+            progress = 90 + int((i / total) * 10)
+            progress_callback(progress, f"Analyzing familiarity... ({i+1}/{total})")
+    
+    return results
 
 def get_spotify_genres_from_tracks(tracks, sp):
-    """Fetch genres from tracks' artists."""
+    """Fetch genres from tracks' artists with better error handling."""
     try:
         artist_ids = set()
         
@@ -174,17 +246,23 @@ def get_spotify_genres_from_tracks(tracks, sp):
         artist_ids = list(artist_ids)
         artist_genres = {}
 
-        # Fetch artist information in batches of 50
+        # Fetch artist information in batches of 50 with retry logic
         for i in range(0, len(artist_ids), 50):
             batch = artist_ids[i:i+50]
-            try:
-                results = sp.artists(batch)
-                for artist in results['artists']:
-                    if artist:
-                        artist_genres[artist['id']] = artist.get('genres', [])
-            except Exception as e:
-                logger.warning(f"Failed to fetch artists batch {i//50 + 1}: {e}")
-                continue
+            max_retries = 2
+            
+            for retry in range(max_retries):
+                try:
+                    results = sp.artists(batch)
+                    for artist in results['artists']:
+                        if artist:
+                            artist_genres[artist['id']] = artist.get('genres', [])
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    if retry == max_retries - 1:
+                        logger.warning(f"Failed to fetch artists batch {i//50 + 1} after {max_retries} retries: {e}")
+                    else:
+                        time.sleep(0.5)  # Brief pause before retry
 
         # Collect all genres and count them
         all_genres = []
@@ -200,7 +278,7 @@ def get_spotify_genres_from_tracks(tracks, sp):
         return []
 
 def get_spotify_data(fetch_type, playlist_url=None, progress_bar=None):
-    """Fetch music data from Spotify."""
+    """Fetch music data from Spotify with improved error handling."""
     try:
         sp = get_spotify_client()
         results = []
@@ -217,16 +295,26 @@ def get_spotify_data(fetch_type, playlist_url=None, progress_bar=None):
                     st.warning("No liked songs found. Please like some songs on Spotify first!")
                     return []
 
-                # Fetch all liked songs
+                # Fetch all liked songs with retry logic
+                max_retries = 3
                 while True:
-                    response = sp.current_user_saved_tracks(limit=50, offset=offset)
-                    batch = response['items']
-                    results.extend(batch)
-                    offset += 50
-                    
-                    if progress_bar:
-                        progress = min(int(len(results) / total * 100), 100)
-                        progress_bar.progress(progress, text=f"Loading tracks... ({len(results)}/{total})")
+                    for retry in range(max_retries):
+                        try:
+                            response = sp.current_user_saved_tracks(limit=50, offset=offset)
+                            batch = response['items']
+                            results.extend(batch)
+                            offset += 50
+                            
+                            if progress_bar:
+                                progress = min(int(len(results) / total * 100), 100)
+                                progress_bar.progress(progress, text=f"Loading tracks... ({len(results)}/{total})")
+                            
+                            break  # Success, exit retry loop
+                        except Exception as e:
+                            if retry == max_retries - 1:
+                                logger.error(f"Failed to fetch liked songs batch after {max_retries} retries: {e}")
+                                return results  # Return what we have so far
+                            time.sleep(1)  # Wait before retry
                     
                     if len(batch) < 50:
                         break
@@ -252,16 +340,26 @@ def get_spotify_data(fetch_type, playlist_url=None, progress_bar=None):
                     st.warning("This playlist is empty!")
                     return []
 
-                # Fetch all playlist tracks
+                # Fetch all playlist tracks with retry logic
+                max_retries = 3
                 while True:
-                    response = sp.playlist_tracks(playlist_id, limit=100, offset=offset)
-                    batch = response['items']
-                    results.extend(batch)
-                    offset += 100
-                    
-                    if progress_bar:
-                        progress = min(int(len(results) / total * 100), 100)
-                        progress_bar.progress(progress, text=f"Loading tracks... ({len(results)}/{total})")
+                    for retry in range(max_retries):
+                        try:
+                            response = sp.playlist_tracks(playlist_id, limit=100, offset=offset)
+                            batch = response['items']
+                            results.extend(batch)
+                            offset += 100
+                            
+                            if progress_bar:
+                                progress = min(int(len(results) / total * 100), 100)
+                                progress_bar.progress(progress, text=f"Loading tracks... ({len(results)}/{total})")
+                            
+                            break  # Success, exit retry loop
+                        except Exception as e:
+                            if retry == max_retries - 1:
+                                logger.error(f"Failed to fetch playlist batch after {max_retries} retries: {e}")
+                                return results  # Return what we have so far
+                            time.sleep(1)  # Wait before retry
                     
                     if len(batch) < 100:
                         break
@@ -303,17 +401,24 @@ def filter_by_audio_features(tracks, mood_params, sp, tolerance=0.3):
             batch_ids = track_ids[i:i+100]
             batch_tracks = tracks[i:i+100]
             
-            try:
-                features_list = sp.audio_features(batch_ids)
-                
-                for track, features in zip(batch_tracks, features_list):
-                    if features and matches_mood(features, mood_params, tolerance):
-                        filtered_tracks.append(track)
-                        
-            except Exception as e:
-                logger.warning(f"Failed to get audio features for batch {i//100 + 1}: {e}")
-                # If audio features fail, include tracks anyway
-                filtered_tracks.extend(batch_tracks)
+            max_retries = 2
+            for retry in range(max_retries):
+                try:
+                    features_list = sp.audio_features(batch_ids)
+                    
+                    for track, features in zip(batch_tracks, features_list):
+                        if features and matches_mood(features, mood_params, tolerance):
+                            filtered_tracks.append(track)
+                    
+                    break  # Success, exit retry loop
+                    
+                except Exception as e:
+                    if retry == max_retries - 1:
+                        logger.warning(f"Failed to get audio features for batch {i//100 + 1} after {max_retries} retries: {e}")
+                        # If audio features fail, include tracks anyway
+                        filtered_tracks.extend(batch_tracks)
+                    else:
+                        time.sleep(0.5)  # Brief pause before retry
                 
         return filtered_tracks
         
@@ -383,16 +488,21 @@ def render_fetch_music_page():
                 st.error("No music data could be fetched. Please try again.")
                 return
 
-            progress_bar.progress(90, text="Calculating familiarity scores...")
+            progress_bar.progress(80, text="Calculating familiarity scores...")
             
             sp = get_spotify_client()
             
-            # Add familiarity scores
-            for i, track in enumerate(data):
-                track['familiarity_score'] = calculate_real_familiarity(track['track']['id'], sp)
-                if i % 10 == 0:  # Update progress every 10 tracks
-                    progress = 90 + int((i / len(data)) * 10)
-                    progress_bar.progress(progress, text=f"Analyzing familiarity... ({i+1}/{len(data)})")
+            # Get all track IDs at once
+            track_ids = [track['track']['id'] for track in data if track.get('track', {}).get('id')]
+            
+            # Calculate familiarity scores in batch
+            familiarity_scores = calculate_real_familiarity_batch(track_ids, sp)
+            
+            # Assign scores to tracks
+            for track in data:
+                track_id = track.get('track', {}).get('id')
+                if track_id:
+                    track['familiarity_score'] = familiarity_scores.get(track_id, 0)
 
             progress_bar.progress(100, text="Complete!")
             
@@ -529,14 +639,19 @@ def render_mood_selection_page():
                 
                 for i in range(0, len(artist_ids), 50):
                     batch = artist_ids[i:i+50]
-                    try:
-                        results = sp.artists(batch)
-                        for artist in results['artists']:
-                            if artist:
-                                artist_genres[artist['id']] = artist.get('genres', [])
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch artist genres: {e}")
-                        continue
+                    max_retries = 2
+                    for retry in range(max_retries):
+                        try:
+                            results = sp.artists(batch)
+                            for artist in results['artists']:
+                                if artist:
+                                    artist_genres[artist['id']] = artist.get('genres', [])
+                            break
+                        except Exception as e:
+                            if retry == max_retries - 1:
+                                logger.warning(f"Failed to fetch artist genres: {e}")
+                            else:
+                                time.sleep(0.5)
 
                 # Filter tracks by genre
                 for track in filtered_tracks:
@@ -647,133 +762,7 @@ def render_playlist_details_page():
                 track_ids = [
                     track['track']['id'] 
                     for track in filtered_data 
-                    if track.get('track', {}).get('id')
-                ]
-
-                if shuffle_enabled:
-                    random.shuffle(track_ids)
-
-                # Limit to requested number of songs
-                track_ids = track_ids[:num_songs]
-
-                # Add tracks in batches of 100
-                progress_bar = st.progress(0, text="Adding tracks to playlist...")
-                
-                for i in range(0, len(track_ids), 100):
-                    batch = track_ids[i:i + 100]
-                    sp.playlist_add_items(playlist_id, batch)
-                    
-                    progress = int((i + len(batch)) / len(track_ids) * 100)
-                    progress_bar.progress(progress, text=f"Added {i + len(batch)}/{len(track_ids)} tracks...")
-
-                progress_bar.progress(100, text="Playlist created successfully!")
-
-                # Success message
-                st.success(f"🎉 Playlist '{playlist_name}' created successfully!")
-                st.balloons()
-                
-                playlist_url = new_playlist['external_urls']['spotify']
-                st.markdown(f"🎵 **[Open '{playlist_name}' in Spotify →]({playlist_url})**")
-                
-                # Store playlist info
-                st.session_state.playlist_name = playlist_name
-                st.session_state.page = "playlist_created"
-
-        except Exception as e:
-            st.error(f"Failed to create playlist: {e}")
-            logger.error(f"Playlist creation error: {e}")
-
-def render_playlist_created_page():
-    """Render the success page after playlist creation."""
-    st.header("🎉 Playlist Created Successfully!")
-    
-    st.success(f"Your playlist '{st.session_state.playlist_name}' is ready to enjoy!")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("🔄 Create Another Playlist"):
-            st.session_state.page = "mood_and_genre"
-            st.rerun()
-    
-    with col2:
-        if st.button("📱 Use Different Music"):
-            st.session_state.page = "fetch_music"
-            # Clear previous data
-            st.session_state.music_data = []
-            st.session_state.spotify_genres = []
-            st.session_state.filtered_music_data = []
-            st.rerun()
-    
-    with col3:
-        if st.button("🏠 Start Over"):
-            # Clear all session state
-            for key in list(st.session_state.keys()):
-                if key != 'spotify_client':
-                    del st.session_state[key]
-            initialize_session_state()
-            st.rerun()
-
-# Custom CSS
-st.markdown("""
-    <style>
-    .main { 
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white; 
-    }
-    .stApp > header {
-        background-color: transparent;
-    }
-    .stButton > button {
-        background: linear-gradient(45deg, #1DB954, #1ed760);
-        color: white;
-        border: none;
-        border-radius: 25px;
-        font-weight: bold;
-    }
-    .stButton > button:hover {
-        background: linear-gradient(45deg, #1ed760, #1DB954);
-        transform: translateY(-2px);
-        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-    }
-    h1, h2, h3, h4, p { 
-        font-family: 'Helvetica', sans-serif;
-    }
-    .stProgress > div > div {
-        background: linear-gradient(45deg, #1DB954, #1ed760);
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-# Main App
-def main():
-    # App title and subtitle
-    st.title("🎧 EchoMood")
-    st.subheader("Discover music that matches your soul 🎶✨")
-    
-    # Navigation
-    pages = {
-        "fetch_music": render_fetch_music_page,
-        "mood_and_genre": render_mood_selection_page, 
-        "playlist_details": render_playlist_details_page,
-        "playlist_created": render_playlist_created_page
-    }
-    
-    # Render current page
-    current_page = st.session_state.page
-    if current_page in pages:
-        pages[current_page]()
-    else:
-        st.error("Unknown page. Redirecting...")
-        st.session_state.page = "fetch_music"
-        st.rerun()
-
-    # Footer
-    st.markdown("---")
-    st.markdown("**EchoMood** • Made with ❤️ and Streamlit • Powered by Spotify")
-
-if __name__ == "__main__":
-    main()
+                    if track.get('track', {}).get
 # ---------------------------------------------------
 # Please don't delete this: Useful Terminal Commands
 # cd Documents\EchoMood
