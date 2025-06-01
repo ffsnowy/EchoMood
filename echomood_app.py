@@ -95,7 +95,7 @@ def clear_spotify_cache():
 
 
 def get_spotify_client():
-    """Get authenticated Spotify client with proper redirect flow."""
+    """Get authenticated Spotify client with fixed URL handling."""
     try:
         client_id, client_secret = get_spotify_credentials()
         
@@ -105,7 +105,8 @@ def get_spotify_client():
             redirect_uri=Config.REDIRECT_URI,
             scope=" ".join(Config.SCOPES),
             open_browser=False,
-            cache_path=Config.CACHE_PATH
+            cache_path=Config.CACHE_PATH,
+            show_dialog=True  # Forces Spotify to show login dialog
         )
 
         # Check for authentication code in URL
@@ -113,121 +114,105 @@ def get_spotify_client():
         if "code" in query_params:
             code = query_params["code"]
             try:
-                # Clear any existing cache first
                 clear_spotify_cache()
                 token_info = auth_manager.get_access_token(code)
                 if token_info:
-                    # Clear the code from URL after successful auth
                     st.query_params.clear()
                     return spotipy.Spotify(auth_manager=auth_manager)
             except Exception as e:
                 st.error(f"Authentication failed: {e}")
                 clear_spotify_cache()
                 st.query_params.clear()
-                # Show login button again
-                auth_url = auth_manager.get_authorize_url()
-                st.markdown(f"""
-                    <div style="text-align: center; margin: 20px;">
-                        <a href="{auth_url}" target="_self" style="
-                            background: linear-gradient(45deg, #1DB954, #1ed760);
-                            color: white;
-                            padding: 12px 30px;
-                            text-decoration: none;
-                            border-radius: 25px;
-                            font-weight: bold;
-                            font-size: 16px;
-                            display: inline-block;
-                            transition: all 0.3s ease;
-                        ">🔐 Login to Spotify</a>
-                    </div>
-                """, unsafe_allow_html=True)
-                st.info("Authentication failed. Please try logging in again.")
-                st.stop()
+                st.rerun()
 
         # Try to get cached token
         try:
             token_info = auth_manager.get_cached_token()
             if token_info:
-                # Test if the token actually works
                 sp = spotipy.Spotify(auth_manager=auth_manager)
                 sp.current_user()  # Test API call
                 return sp
         except Exception as e:
-            # Token is invalid, clear cache and show login
             logger.info(f"Cached token invalid: {e}")
             clear_spotify_cache()
 
-        # Need to authenticate - show styled login button
+        # Need to authenticate
         st.markdown("### 🔐 Please log in to Spotify")
         
         auth_url = auth_manager.get_authorize_url()
         
-        # Create a styled login button that redirects to Spotify
+        # Display the raw URL for debugging
+        st.code(auth_url, language="text")
+        
+        # Method 1: Direct JavaScript redirect (most reliable)
         st.markdown(f"""
             <div style="text-align: center; margin: 30px 0;">
-                <a href="{auth_url}" target="_self" style="
+                <button onclick="window.location.href='{auth_url}'" style="
                     background: linear-gradient(45deg, #1DB954, #1ed760);
                     color: white;
                     padding: 15px 40px;
-                    text-decoration: none;
+                    border: none;
                     border-radius: 30px;
                     font-weight: bold;
                     font-size: 18px;
-                    display: inline-block;
+                    cursor: pointer;
                     box-shadow: 0 4px 15px rgba(29, 185, 84, 0.3);
                     transition: all 0.3s ease;
-                ">🎵 Connect with Spotify</a>
+                ">🎵 Connect with Spotify</button>
             </div>
-            <p style="text-align: center; color: #888; margin-top: 15px;">
-                You'll be redirected to Spotify to log in, then brought back here automatically.
-            </p>
         """, unsafe_allow_html=True)
         
-        # Add utility buttons
+        # Method 2: Manual copy-paste option
+        st.markdown("**Alternative:** Copy and paste this link in a new tab:")
+        st.text_input("Authentication URL:", value=auth_url, help="Copy this URL and paste it in a new browser tab")
+        
+        # Method 3: Streamlit link_button (if available)
+        try:
+            if st.button("🔗 Open Spotify Login (Alternative)", help="Click if the button above doesn't work"):
+                st.markdown(f"Please go to: {auth_url}")
+                st.info("Copy the URL above and paste it in a new browser tab")
+        except:
+            pass
+        
+        st.info("📱 **Mobile users:** You may need to copy the URL and paste it in your browser")
+        
+        # Utility buttons
         col1, col2 = st.columns([1, 1])
-        
         with col1:
-            if st.button("🔄 Refresh Page"):
+            if st.button("🔄 Refresh"):
                 st.rerun()
-        
         with col2:
             if st.button("🗑️ Clear Cache"):
                 clear_spotify_cache()
-                st.success("Cache cleared! Try logging in again.")
                 st.rerun()
         
-        # Show troubleshooting info
-        with st.expander("🔧 Having trouble logging in?"):
-            st.write("**Try these steps:**")
-            st.write("1. Click the 'Connect with Spotify' button above")
-            st.write("2. Log into Spotify when prompted")
-            st.write("3. Click 'Agree' to give EchoMood permission")
-            st.write("4. You'll be automatically redirected back here")
+        # Troubleshooting
+        with st.expander("🔧 Troubleshooting"):
+            st.write("**If the login button doesn't work:**")
+            st.write("1. Copy the URL shown above")
+            st.write("2. Paste it in a new browser tab")
+            st.write("3. Complete the Spotify login")
+            st.write("4. You'll be redirected back here")
             st.write("")
-            st.write("**Still having issues?**")
-            st.write("• Make sure you're logged into Spotify in another tab")
-            st.write("• Try clearing your browser cache")
-            st.write("• Disable any popup blockers")
-            st.write("• Try using an incognito/private browser window")
+            st.write("**Common issues:**")
+            st.write("• **Mobile:** Safari/Chrome may block redirects - use copy/paste method")
+            st.write("• **Ad blockers:** May block Spotify redirects")
+            st.write("• **Corporate networks:** May block external redirects")
+            st.write("• **Private browsing:** Try regular browsing mode")
         
         st.stop()
     
     except Exception as e:
         st.error(f"❌ Authentication Error: {e}")
         
-        # Show reset options
-        st.markdown("### 🔧 Try these solutions:")
-        
         col1, col2 = st.columns([1, 1])
         with col1:
-            if st.button("🔄 Retry Login", type="primary"):
+            if st.button("🔄 Retry"):
                 clear_spotify_cache()
                 st.rerun()
-        
         with col2:
-            if st.button("🆕 Start Fresh"):
+            if st.button("🆕 Reset"):
                 clear_spotify_cache()
-                # Clear all session state
                 for key in list(st.session_state.keys()):
                     del st.session_state[key]
                 st.query_params.clear()
