@@ -95,7 +95,7 @@ def clear_spotify_cache():
 
 
 def get_spotify_client():
-    """Get authenticated Spotify client with improved error handling."""
+    """Get authenticated Spotify client with proper redirect flow."""
     try:
         client_id, client_secret = get_spotify_credentials()
         
@@ -117,13 +117,32 @@ def get_spotify_client():
                 clear_spotify_cache()
                 token_info = auth_manager.get_access_token(code)
                 if token_info:
+                    # Clear the code from URL after successful auth
+                    st.query_params.clear()
                     return spotipy.Spotify(auth_manager=auth_manager)
             except Exception as e:
                 st.error(f"Authentication failed: {e}")
                 clear_spotify_cache()
-                # Clear the code from URL
                 st.query_params.clear()
-                st.rerun()
+                # Show login button again
+                auth_url = auth_manager.get_authorize_url()
+                st.markdown(f"""
+                    <div style="text-align: center; margin: 20px;">
+                        <a href="{auth_url}" target="_self" style="
+                            background: linear-gradient(45deg, #1DB954, #1ed760);
+                            color: white;
+                            padding: 12px 30px;
+                            text-decoration: none;
+                            border-radius: 25px;
+                            font-weight: bold;
+                            font-size: 16px;
+                            display: inline-block;
+                            transition: all 0.3s ease;
+                        ">🔐 Login to Spotify</a>
+                    </div>
+                """, unsafe_allow_html=True)
+                st.info("Authentication failed. Please try logging in again.")
+                st.stop()
 
         # Try to get cached token
         try:
@@ -134,44 +153,79 @@ def get_spotify_client():
                 sp.current_user()  # Test API call
                 return sp
         except Exception as e:
-            # Token is invalid, clear cache and re-authenticate
+            # Token is invalid, clear cache and show login
             logger.info(f"Cached token invalid: {e}")
             clear_spotify_cache()
-            token_info = None
 
-        # Need to authenticate
+        # Need to authenticate - show styled login button
         st.markdown("### 🔐 Please log in to Spotify")
         
+        auth_url = auth_manager.get_authorize_url()
+        
+        # Create a styled login button that redirects to Spotify
+        st.markdown(f"""
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="{auth_url}" target="_self" style="
+                    background: linear-gradient(45deg, #1DB954, #1ed760);
+                    color: white;
+                    padding: 15px 40px;
+                    text-decoration: none;
+                    border-radius: 30px;
+                    font-weight: bold;
+                    font-size: 18px;
+                    display: inline-block;
+                    box-shadow: 0 4px 15px rgba(29, 185, 84, 0.3);
+                    transition: all 0.3s ease;
+                ">🎵 Connect with Spotify</a>
+            </div>
+            <p style="text-align: center; color: #888; margin-top: 15px;">
+                You'll be redirected to Spotify to log in, then brought back here automatically.
+            </p>
+        """, unsafe_allow_html=True)
+        
+        # Add utility buttons
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            auth_url = auth_manager.get_authorize_url()
-            st.markdown(f"[🔐 **Click here to log in to Spotify**]({auth_url})")
-            st.info("After logging in, you'll be redirected back to this app.")
+            if st.button("🔄 Refresh Page"):
+                st.rerun()
         
         with col2:
-            if st.button("🔄 Clear Cache & Retry"):
+            if st.button("🗑️ Clear Cache"):
                 clear_spotify_cache()
-                st.query_params.clear()
+                st.success("Cache cleared! Try logging in again.")
                 st.rerun()
         
         # Show troubleshooting info
-        with st.expander("🔧 Troubleshooting"):
-            st.write("If you're having login issues:")
-            st.write("1. Click 'Clear Cache & Retry' above")
-            st.write("2. Make sure you're logged into Spotify in another tab")  
-            st.write("3. Try logging in with a different browser/incognito mode")
-            st.write("4. Check that popup blockers aren't preventing the redirect")
+        with st.expander("🔧 Having trouble logging in?"):
+            st.write("**Try these steps:**")
+            st.write("1. Click the 'Connect with Spotify' button above")
+            st.write("2. Log into Spotify when prompted")
+            st.write("3. Click 'Agree' to give EchoMood permission")
+            st.write("4. You'll be automatically redirected back here")
+            st.write("")
+            st.write("**Still having issues?**")
+            st.write("• Make sure you're logged into Spotify in another tab")
+            st.write("• Try clearing your browser cache")
+            st.write("• Disable any popup blockers")
+            st.write("• Try using an incognito/private browser window")
         
         st.stop()
     
     except Exception as e:
-        st.error(f"Failed to authenticate with Spotify: {e}")
+        st.error(f"❌ Authentication Error: {e}")
         
-        # Add logout/reset button
+        # Show reset options
+        st.markdown("### 🔧 Try these solutions:")
+        
         col1, col2 = st.columns([1, 1])
         with col1:
-            if st.button("🚪 Logout & Start Fresh"):
+            if st.button("🔄 Retry Login", type="primary"):
+                clear_spotify_cache()
+                st.rerun()
+        
+        with col2:
+            if st.button("🆕 Start Fresh"):
                 clear_spotify_cache()
                 # Clear all session state
                 for key in list(st.session_state.keys()):
@@ -179,12 +233,6 @@ def get_spotify_client():
                 st.query_params.clear()
                 st.rerun()
         
-        with col2:
-            if st.button("🔄 Retry Authentication"):
-                clear_spotify_cache()
-                st.rerun()
-        
-        st.write("Please try the authentication process again.")
         st.stop()
     
 def calculate_real_familiarity_batch(track_ids, sp):
