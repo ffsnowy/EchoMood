@@ -37,7 +37,7 @@ initialize_session_state()
 
 # Configuration
 class Config:
-    REDIRECT_URI = "https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app"
+    REDIRECT_URI = "https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app/"  # Added trailing slash
     CACHE_PATH = ".cache"
     SCOPES = [
         "user-library-read",
@@ -94,8 +94,9 @@ def clear_spotify_cache():
 
 
 
+
 def get_spotify_client():
-    """Get authenticated Spotify client with fixed URL handling."""
+    """Get authenticated Spotify client with improved error handling."""
     try:
         client_id, client_secret = get_spotify_credentials()
         
@@ -106,7 +107,7 @@ def get_spotify_client():
             scope=" ".join(Config.SCOPES),
             open_browser=False,
             cache_path=Config.CACHE_PATH,
-            show_dialog=True  # Forces Spotify to show login dialog
+            show_dialog=True
         )
 
         # Check for authentication code in URL
@@ -114,7 +115,6 @@ def get_spotify_client():
         if "code" in query_params:
             code = query_params["code"]
             try:
-                clear_spotify_cache()
                 token_info = auth_manager.get_access_token(code)
                 if token_info:
                     st.query_params.clear()
@@ -136,69 +136,62 @@ def get_spotify_client():
             logger.info(f"Cached token invalid: {e}")
             clear_spotify_cache()
 
-        # Need to authenticate
-        st.markdown("### 🔐 Please log in to Spotify")
+        # Need to authenticate - show login instructions
+        st.markdown("### 🔐 Spotify Authentication Required")
         
         auth_url = auth_manager.get_authorize_url()
         
-        # Display the raw URL for debugging
+        # Show the authentication URL that users need to copy/paste
+        st.markdown("**Please follow these steps:**")
+        st.markdown("1. Copy the URL below")
+        st.markdown("2. Paste it in a new browser tab")
+        st.markdown("3. Log in to Spotify and authorize the app")
+        st.markdown("4. You'll be redirected back here automatically")
+        
         st.code(auth_url, language="text")
         
-        # Method 1: Direct JavaScript redirect (most reliable)
-        st.markdown(f"""
-            <div style="text-align: center; margin: 30px 0;">
-                <button onclick="window.location.href='{auth_url}'" style="
-                    background: linear-gradient(45deg, #1DB954, #1ed760);
-                    color: white;
-                    padding: 15px 40px;
-                    border: none;
-                    border-radius: 30px;
-                    font-weight: bold;
-                    font-size: 18px;
-                    cursor: pointer;
-                    box-shadow: 0 4px 15px rgba(29, 185, 84, 0.3);
-                    transition: all 0.3s ease;
-                ">🎵 Connect with Spotify</button>
-            </div>
-        """, unsafe_allow_html=True)
+        # Manual authentication code input as backup
+        st.markdown("---")
+        st.markdown("**Alternative: Manual Code Entry**")
+        st.markdown("If the redirect doesn't work, you can manually enter the authorization code:")
         
-        # Method 2: Manual copy-paste option
-        st.markdown("**Alternative:** Copy and paste this link in a new tab:")
-        st.text_input("Authentication URL:", value=auth_url, help="Copy this URL and paste it in a new browser tab")
+        manual_code = st.text_input(
+            "Enter authorization code from URL:", 
+            help="After authorizing, copy the 'code' parameter from the redirect URL"
+        )
         
-        # Method 3: Streamlit link_button (if available)
-        try:
-            if st.button("🔗 Open Spotify Login (Alternative)", help="Click if the button above doesn't work"):
-                st.markdown(f"Please go to: {auth_url}")  # FIXED: Added opening parenthesis
-                st.info("Copy the URL above and paste it in a new browser tab")
-        except:
-            pass
-        
-        st.info("📱 **Mobile users:** You may need to copy the URL and paste it in your browser")
+        if manual_code:
+            try:
+                token_info = auth_manager.get_access_token(manual_code)
+                if token_info:
+                    st.success("Authentication successful!")
+                    return spotipy.Spotify(auth_manager=auth_manager)
+            except Exception as e:
+                st.error(f"Manual authentication failed: {e}")
         
         # Utility buttons
-        col1, col2 = st.columns([1, 1])
+        col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
-            if st.button("🔄 Refresh"):
+            if st.button("🔄 Refresh Page"):
                 st.rerun()
         with col2:
             if st.button("🗑️ Clear Cache"):
                 clear_spotify_cache()
                 st.rerun()
+        with col3:
+            if st.button("📋 Copy URL", help="Click to highlight the URL for copying"):
+                st.info("URL is displayed above - select and copy it")
         
         # Troubleshooting
         with st.expander("🔧 Troubleshooting"):
-            st.write("**If the login button doesn't work:**")
-            st.write("1. Copy the URL shown above")
-            st.write("2. Paste it in a new browser tab")
-            st.write("3. Complete the Spotify login")
-            st.write("4. You'll be redirected back here")
+            st.write("**Common solutions:**")
+            st.write("• **Copy/Paste Method:** Copy the URL above and paste in a new tab")
+            st.write("• **Check Redirect URI:** Ensure your Spotify app settings have the correct redirect URI")
+            st.write("• **Clear Browser Cache:** Try clearing your browser cache and cookies")
+            st.write("• **Try Different Browser:** Some browsers block redirects more aggressively")
+            st.write("• **Disable Ad Blockers:** They may interfere with Spotify authentication")
             st.write("")
-            st.write("**Common issues:**")
-            st.write("• **Mobile:** Safari/Chrome may block redirects - use copy/paste method")
-            st.write("• **Ad blockers:** May block Spotify redirects")
-            st.write("• **Corporate networks:** May block external redirects")
-            st.write("• **Private browsing:** Try regular browsing mode")
+            st.write(f"**Your Redirect URI should be:** `{Config.REDIRECT_URI}`")
         
         st.stop()
     
@@ -211,7 +204,7 @@ def get_spotify_client():
                 clear_spotify_cache()
                 st.rerun()
         with col2:
-            if st.button("🆕 Reset"):
+            if st.button("🆕 Reset All"):
                 clear_spotify_cache()
                 for key in list(st.session_state.keys()):
                     del st.session_state[key]
@@ -219,7 +212,8 @@ def get_spotify_client():
                 st.rerun()
         
         st.stop()
-    
+
+
 def calculate_real_familiarity_batch(track_ids, sp):
     """Calculate familiarity scores for multiple tracks efficiently."""
     try:
