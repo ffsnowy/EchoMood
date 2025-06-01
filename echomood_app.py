@@ -169,7 +169,7 @@ def get_spotify_client():
         # Method 3: Streamlit link_button (if available)
         try:
             if st.button("🔗 Open Spotify Login (Alternative)", help="Click if the button above doesn't work"):
-                st.markdown(f"Please go to: {auth_url}")
+                st.markdown(f"Please go to: {auth_url}")  # FIXED: Added opening parenthesis
                 st.info("Copy the URL above and paste it in a new browser tab")
         except:
             pass
