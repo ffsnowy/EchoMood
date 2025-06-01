@@ -80,29 +80,18 @@ SPOTIFY_CLIENT_SECRET = "your_client_secret"
         st.error(f"Error loading credentials: {e}")
         st.stop()
 
-@st.cache_resource
 def get_spotify_client():
-    """Get authenticated Spotify client."""
+    """Get authenticated Spotify client - REMOVED @st.cache_resource to fix widget error."""
     try:
         client_id, client_secret = get_spotify_credentials()
-        
-        # Detect if we're running locally or deployed
-        is_local = "localhost" in st.get_option("server.headless") or "127.0.0.1" in str(st.get_option("server.headless"))
-        
-        # Use different redirect URI based on environment
-        if is_local:
-            redirect_uri = "http://localhost:8501/"
-        else:
-            redirect_uri = Config.REDIRECT_URI
         
         auth_manager = SpotifyOAuth(
             client_id=client_id,
             client_secret=client_secret,
-            redirect_uri=redirect_uri,
-            scope=" ".join(Config.SCOPES),  # Join scopes as string
-            open_browser=False,  # Always False for web apps
-            cache_path=Config.CACHE_PATH,
-            show_dialog=True  # Force login dialog
+            redirect_uri=Config.REDIRECT_URI,
+            scope=" ".join(Config.SCOPES),  # Fixed: Convert list to string
+            open_browser=False,
+            cache_path=Config.CACHE_PATH
         )
 
         token_info = auth_manager.get_cached_token()
@@ -116,25 +105,14 @@ def get_spotify_client():
                 except Exception as e:
                     st.error(f"Authentication failed: {e}")
                     st.info("Please try the authentication process again.")
+                    # Don't use st.button in cached function - just show link
                     auth_url = auth_manager.get_authorize_url()
                     st.markdown(f"[🔐 Click here to log in to Spotify]({auth_url})")
                     st.stop()
             else:
                 st.markdown("### 🔐 Please log in to Spotify")
                 auth_url = auth_manager.get_authorize_url()
-                st.markdown(f"""
-                <div style="text-align: center; padding: 20px;">
-                    <a href="{auth_url}" target="_self" style="
-                        background: linear-gradient(45deg, #1DB954, #1ed760);
-                        color: white;
-                        padding: 12px 24px;
-                        text-decoration: none;
-                        border-radius: 25px;
-                        font-weight: bold;
-                        display: inline-block;
-                    ">🎵 Connect to Spotify</a>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown(f"[🔐 Click here to log in to Spotify]({auth_url})")
                 st.info("After logging in, you'll be redirected back to this app.")
                 st.stop()
 
@@ -143,14 +121,8 @@ def get_spotify_client():
     except Exception as e:
         st.error(f"Failed to authenticate with Spotify: {e}")
         st.write("Please check your credentials and try again.")
-        
-        # Option to clear cache and retry
-        if st.button("🔄 Clear Cache and Retry"):
-            if os.path.exists(Config.CACHE_PATH):
-                os.remove(Config.CACHE_PATH)
-            st.rerun()
         st.stop()
-
+    
 def calculate_real_familiarity(track_id, sp):
     """Calculate familiarity score based on actual listening history."""
     try:
