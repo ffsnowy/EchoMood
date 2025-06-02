@@ -120,7 +120,7 @@ def create_auth_url():
         'show_dialog': 'true'
     }
     
-    auth_url = f"https://accounts.spotify.com/authorize?{urllib.parse.urlencode(params)}"
+    auth_url = f"accounts.spotify.com{urllib.parse.urlencode(params)}"
     return auth_url
 
 
