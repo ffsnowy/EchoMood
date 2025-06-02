@@ -110,15 +110,17 @@ def get_spotify_client():
             show_dialog=True
         )
 
-        # Check for authentication code in URL
+        # Check for authentication code in URL parameters
         query_params = st.query_params
         if "code" in query_params:
             code = query_params["code"]
             try:
                 token_info = auth_manager.get_access_token(code)
                 if token_info:
+                    # Clear the code from URL to prevent reuse
                     st.query_params.clear()
-                    return spotipy.Spotify(auth_manager=auth_manager)
+                    sp = spotipy.Spotify(auth_manager=auth_manager)
+                    return sp
             except Exception as e:
                 st.error(f"Authentication failed: {e}")
                 clear_spotify_cache()
@@ -136,41 +138,59 @@ def get_spotify_client():
             logger.info(f"Cached token invalid: {e}")
             clear_spotify_cache()
 
-        # Need to authenticate - show login instructions
-        st.markdown("### 🔐 Spotify Authentication Required")
+        # Need to authenticate - show improved login interface
+        st.markdown("### 🔐 Connect Your Spotify Account")
+        st.markdown("Click the button below to authorize EchoMood with your Spotify account:")
         
         auth_url = auth_manager.get_authorize_url()
         
-        # Show the authentication URL that users need to copy/paste
-        st.markdown("**Please follow these steps:**")
-        st.markdown("1. Copy the URL below")
-        st.markdown("2. Paste it in a new browser tab")
-        st.markdown("3. Log in to Spotify and authorize the app")
-        st.markdown("4. You'll be redirected back here automatically")
+        # Create a more prominent button-like link
+        st.markdown(f"""
+        <div style="text-align: center; margin: 20px 0;">
+            <a href="{auth_url}" target="_blank" style="
+                background: linear-gradient(45deg, #1DB954, #1ed760);
+                color: white;
+                padding: 15px 30px;
+                text-decoration: none;
+                border-radius: 25px;
+                font-weight: bold;
+                font-size: 18px;
+                display: inline-block;
+                margin: 10px;
+                box-shadow: 0 4px 15px rgba(29, 185, 84, 0.3);
+                transition: all 0.3s ease;
+            ">
+                🎵 Connect to Spotify
+            </a>
+        </div>
+        """, unsafe_allow_html=True)
         
-        st.code(auth_url, language="text")
+        st.markdown("**After authorization, you'll be redirected back to this app automatically.**")
         
-        # Manual authentication code input as backup
+        # Manual code input as backup
         st.markdown("---")
-        st.markdown("**Alternative: Manual Code Entry**")
-        st.markdown("If the redirect doesn't work, you can manually enter the authorization code:")
-        
-        manual_code = st.text_input(
-            "Enter authorization code from URL:", 
-            help="After authorizing, copy the 'code' parameter from the redirect URL"
-        )
-        
-        if manual_code:
-            try:
-                token_info = auth_manager.get_access_token(manual_code)
-                if token_info:
-                    st.success("Authentication successful!")
-                    return spotipy.Spotify(auth_manager=auth_manager)
-            except Exception as e:
-                st.error(f"Manual authentication failed: {e}")
+        with st.expander("🔧 Having trouble? Try manual authentication"):
+            st.markdown("If the button above doesn't work:")
+            st.markdown("1. Copy this URL and paste it in a new tab:")
+            st.code(auth_url, language="text")
+            st.markdown("2. Or enter the authorization code manually below:")
+            
+            manual_code = st.text_input(
+                "Authorization code:", 
+                help="After authorizing, copy the 'code' parameter from the redirect URL"
+            )
+            
+            if manual_code:
+                try:
+                    token_info = auth_manager.get_access_token(manual_code)
+                    if token_info:
+                        st.success("Authentication successful!")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Manual authentication failed: {e}")
         
         # Utility buttons
-        col1, col2, col3 = st.columns([1, 1, 1])
+        col1, col2 = st.columns([1, 1])
         with col1:
             if st.button("🔄 Refresh Page"):
                 st.rerun()
@@ -178,20 +198,6 @@ def get_spotify_client():
             if st.button("🗑️ Clear Cache"):
                 clear_spotify_cache()
                 st.rerun()
-        with col3:
-            if st.button("📋 Copy URL", help="Click to highlight the URL for copying"):
-                st.info("URL is displayed above - select and copy it")
-        
-        # Troubleshooting
-        with st.expander("🔧 Troubleshooting"):
-            st.write("**Common solutions:**")
-            st.write("• **Copy/Paste Method:** Copy the URL above and paste in a new tab")
-            st.write("• **Check Redirect URI:** Ensure your Spotify app settings have the correct redirect URI")
-            st.write("• **Clear Browser Cache:** Try clearing your browser cache and cookies")
-            st.write("• **Try Different Browser:** Some browsers block redirects more aggressively")
-            st.write("• **Disable Ad Blockers:** They may interfere with Spotify authentication")
-            st.write("")
-            st.write(f"**Your Redirect URI should be:** `{Config.REDIRECT_URI}`")
         
         st.stop()
     
@@ -212,6 +218,11 @@ def get_spotify_client():
                 st.rerun()
         
         st.stop()
+
+
+# Also add this to your initialize_session_state() function defaults:
+# Add this line to the defaults dictionary:
+"auth_token": None
 
 
 def calculate_real_familiarity_batch(track_ids, sp):
