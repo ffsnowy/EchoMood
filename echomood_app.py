@@ -344,8 +344,31 @@ def validate_playlist_url(url):
     return True, ""
 
 def render_fetch_music_page():
-    """Render the music fetching page."""
+    """Render the music fetching page with authentication status."""
     st.header("🎵 Choose Your Music Source")
+    
+    # Show authentication status
+    try:
+        sp = get_spotify_client()
+        user_info = sp.current_user()
+        
+        # Success message with user info
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.success(f"✅ Connected as: **{user_info['display_name']}**")
+        with col2:
+            if st.button("🚪 Logout", key="logout_main"):
+                clear_spotify_cache()
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.query_params.clear()
+                st.rerun()
+    except:
+        # This will trigger the authentication flow in get_spotify_client()
+        return
+    
+    # Music source selection
+    st.markdown("### 📀 Select Music Source")
     
     fetch_choice = st.radio(
         "What music would you like to analyze?",
@@ -366,44 +389,54 @@ def render_fetch_music_page():
                 st.error(error_msg)
                 return
 
-    if st.button('🚀 Fetch My Music', type="primary"):
-        if fetch_choice == "Specific Playlist" and not playlist_url:
-            st.error("Please enter a playlist URL first!")
-            return
-            
-        with st.spinner('🎶 Fetching your music... This may take a moment!'):
-            progress_bar = st.progress(0, text="Initializing...")
-            
-            # Fetch the data
-            if fetch_choice == "Liked Songs":
-                data = get_spotify_data("Liked Songs", progress_bar=progress_bar)
-            else:
-                data = get_spotify_data("Playlist", playlist_url, progress_bar=progress_bar)
-
-            if not data:
-                st.error("No music data could be fetched. Please try again.")
+    # Styled fetch button
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button('🚀 Fetch My Music', type="primary", use_container_width=True):
+            if fetch_choice == "Specific Playlist" and not playlist_url:
+                st.error("Please enter a playlist URL first!")
                 return
+                
+            with st.spinner('🎶 Fetching your music... This may take a moment!'):
+                progress_bar = st.progress(0, text="Initializing...")
+                
+                # Fetch the data
+                if fetch_choice == "Liked Songs":
+                    data = get_spotify_data("Liked Songs", progress_bar=progress_bar)
+                else:
+                    data = get_spotify_data("Playlist", playlist_url, progress_bar=progress_bar)
 
-            progress_bar.progress(90, text="Calculating familiarity scores...")
-            
-            sp = get_spotify_client()
-            
-            # Add familiarity scores
-            for i, track in enumerate(data):
-                track['familiarity_score'] = calculate_real_familiarity(track['track']['id'], sp)
-                if i % 10 == 0:  # Update progress every 10 tracks
-                    progress = 90 + int((i / len(data)) * 10)
-                    progress_bar.progress(progress, text=f"Analyzing familiarity... ({i+1}/{len(data)})")
+                if not data:
+                    st.error("No music data could be fetched. Please try again.")
+                    return
 
-            progress_bar.progress(100, text="Complete!")
-            
-            # Store data and move to next page
-            st.session_state.music_data = data
-            st.session_state.page = 'mood_and_genre'
-            
-            st.success(f"✅ Successfully loaded {len(data)} tracks!")
-            time.sleep(1)
-            st.rerun()
+                progress_bar.progress(80, text="Calculating familiarity scores...")
+                
+                sp = get_spotify_client()
+                
+                # Get all track IDs at once
+                track_ids = [track['track']['id'] for track in data if track.get('track', {}).get('id')]
+                
+                # Calculate familiarity scores in batch
+                familiarity_scores = calculate_real_familiarity_batch(track_ids, sp)
+                
+                # Assign scores to tracks
+                for track in data:
+                    track_id = track.get('track', {}).get('id')
+                    if track_id:
+                        track['familiarity_score'] = familiarity_scores.get(track_id, 0)
+
+                progress_bar.progress(100, text="Complete!")
+                
+                # Store data and move to next page
+                st.session_state.music_data = data
+                st.session_state.page = 'mood_and_genre'
+                
+                st.success(f"✅ Successfully loaded {len(data)} tracks!")
+                time.sleep(1)
+                st.rerun()
 
 def render_mood_selection_page():
     """Render the mood and genre selection page."""
