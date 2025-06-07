@@ -133,6 +133,7 @@ def get_spotify_client():
             cache_path=Config.CACHE_PATH
         )
         token_info = auth_manager.get_cached_token()
+
         if not token_info:
             query_params = st.query_params
             if "code" in query_params:
@@ -152,6 +153,7 @@ def get_spotify_client():
                 st.markdown(f"[🔐 Click here to log in to Spotify]({auth_url})")
                 st.info("After logging in, you'll be redirected back to this app.")
                 st.stop()
+
         return spotipy.Spotify(auth_manager=auth_manager)
     
     except Exception as e:
