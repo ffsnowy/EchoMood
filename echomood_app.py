@@ -88,6 +88,8 @@ def get_spotify_credentials():
         SPOTIFY_CLIENT_SECRET = "your_client_secret"
         ```
         """)
+        st.write("Spotify Client ID:", st.secrets.get("SPOTIFY_CLIENT_ID", "Not found"))
+
         
         # Temporary solution - allow manual input
         with st.expander("🔧 Enter credentials manually (temporary)"):
