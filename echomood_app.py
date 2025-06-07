@@ -37,7 +37,7 @@ initialize_session_state()
 
 # Configuration
 class Config:
-    REDIRECT_URI = "https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app/"  # Added trailing slash
+    REDIRECT_URI = "https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app"
     CACHE_PATH = ".cache"
     SCOPES = [
         "user-library-read",
@@ -80,23 +80,8 @@ SPOTIFY_CLIENT_SECRET = "your_client_secret"
         st.error(f"Error loading credentials: {e}")
         st.stop()
 
-
-def clear_spotify_cache():
-    """Clear Spotify authentication cache."""
-    try:
-        if os.path.exists(Config.CACHE_PATH):
-            os.remove(Config.CACHE_PATH)
-        # Also clear from session state
-        if 'spotify_client' in st.session_state:
-            del st.session_state['spotify_client']
-    except Exception as e:
-        logger.warning(f"Could not clear cache: {e}")
-
-
-
-
 def get_spotify_client():
-    """Get authenticated Spotify client with improved error handling."""
+    """Get authenticated Spotify client - REMOVED @st.cache_resource to fix widget error."""
     try:
         client_id, client_secret = get_spotify_credentials()
         
@@ -104,149 +89,72 @@ def get_spotify_client():
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=Config.REDIRECT_URI,
-            scope=" ".join(Config.SCOPES),
+            scope=" ".join(Config.SCOPES),  # Fixed: Convert list to string
             open_browser=False,
-            cache_path=Config.CACHE_PATH,
-            show_dialog=True
+            cache_path=Config.CACHE_PATH
         )
 
-        # Check for authentication code in URL
-        query_params = st.query_params
-        if "code" in query_params:
-            code = query_params["code"]
-            try:
-                token_info = auth_manager.get_access_token(code)
-                if token_info:
-                    st.query_params.clear()
-                    return spotipy.Spotify(auth_manager=auth_manager)
-            except Exception as e:
-                st.error(f"Authentication failed: {e}")
-                clear_spotify_cache()
-                st.query_params.clear()
-                st.rerun()
+        token_info = auth_manager.get_cached_token()
 
-        # Try to get cached token
-        try:
-            token_info = auth_manager.get_cached_token()
-            if token_info:
-                sp = spotipy.Spotify(auth_manager=auth_manager)
-                sp.current_user()  # Test API call
-                return sp
-        except Exception as e:
-            logger.info(f"Cached token invalid: {e}")
-            clear_spotify_cache()
+        if not token_info:
+            query_params = st.query_params
+            if "code" in query_params:
+                code = query_params["code"]
+                try:
+                    token_info = auth_manager.get_access_token(code)
+                except Exception as e:
+                    st.error(f"Authentication failed: {e}")
+                    st.info("Please try the authentication process again.")
+                    # Don't use st.button in cached function - just show link
+                    auth_url = auth_manager.get_authorize_url()
+                    st.markdown(f"[🔐 Click here to log in to Spotify]({auth_url})")
+                    st.stop()
+            else:
+                st.markdown("### 🔐 Please log in to Spotify")
+                auth_url = auth_manager.get_authorize_url()
+                st.markdown(f"[🔐 Click here to log in to Spotify]({auth_url})")
+                st.info("After logging in, you'll be redirected back to this app.")
+                st.stop()
 
-        # Need to authenticate - show login instructions
-        st.markdown("### 🔐 Spotify Authentication Required")
-        
-        auth_url = auth_manager.get_authorize_url()
-        
-        # Show the authentication URL that users need to copy/paste
-        st.markdown("**Please follow these steps:**")
-        st.markdown("1. Copy the URL below")
-        st.markdown("2. Paste it in a new browser tab")
-        st.markdown("3. Log in to Spotify and authorize the app")
-        st.markdown("4. You'll be redirected back here automatically")
-        
-        st.code(auth_url, language="text")
-        
-        # Manual authentication code input as backup
-        st.markdown("---")
-        st.markdown("**Alternative: Manual Code Entry**")
-        st.markdown("If the redirect doesn't work, you can manually enter the authorization code:")
-        
-        manual_code = st.text_input(
-            "Enter authorization code from URL:", 
-            help="After authorizing, copy the 'code' parameter from the redirect URL"
-        )
-        
-        if manual_code:
-            try:
-                token_info = auth_manager.get_access_token(manual_code)
-                if token_info:
-                    st.success("Authentication successful!")
-                    return spotipy.Spotify(auth_manager=auth_manager)
-            except Exception as e:
-                st.error(f"Manual authentication failed: {e}")
-        
-        # Utility buttons
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col1:
-            if st.button("🔄 Refresh Page"):
-                st.rerun()
-        with col2:
-            if st.button("🗑️ Clear Cache"):
-                clear_spotify_cache()
-                st.rerun()
-        with col3:
-            if st.button("📋 Copy URL", help="Click to highlight the URL for copying"):
-                st.info("URL is displayed above - select and copy it")
-        
-        # Troubleshooting
-        with st.expander("🔧 Troubleshooting"):
-            st.write("**Common solutions:**")
-            st.write("• **Copy/Paste Method:** Copy the URL above and paste in a new tab")
-            st.write("• **Check Redirect URI:** Ensure your Spotify app settings have the correct redirect URI")
-            st.write("• **Clear Browser Cache:** Try clearing your browser cache and cookies")
-            st.write("• **Try Different Browser:** Some browsers block redirects more aggressively")
-            st.write("• **Disable Ad Blockers:** They may interfere with Spotify authentication")
-            st.write("")
-            st.write(f"**Your Redirect URI should be:** `{Config.REDIRECT_URI}`")
-        
-        st.stop()
+        return spotipy.Spotify(auth_manager=auth_manager)
     
     except Exception as e:
-        st.error(f"❌ Authentication Error: {e}")
-        
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            if st.button("🔄 Retry"):
-                clear_spotify_cache()
-                st.rerun()
-        with col2:
-            if st.button("🆕 Reset All"):
-                clear_spotify_cache()
-                for key in list(st.session_state.keys()):
-                    del st.session_state[key]
-                st.query_params.clear()
-                st.rerun()
-        
+        st.error(f"Failed to authenticate with Spotify: {e}")
+        st.write("Please check your credentials and try again.")
         st.stop()
-
-
-def calculate_real_familiarity_batch(track_ids, sp):
-    """Calculate familiarity scores for multiple tracks efficiently."""
+    
+def calculate_real_familiarity(track_id, sp):
+    """Calculate familiarity score based on actual listening history."""
     try:
-        # Get recently played tracks once
+        # Get recently played tracks (last 50)
         recent_tracks = sp.current_user_recently_played(limit=50)
-        recent_track_ids = [item['track']['id'] for item in recent_tracks['items']]
-        recent_counts = Counter(recent_track_ids)
         
-        # Get top tracks once
-        top_track_ids = set()
+        # Count how many times this track appears in recent history
+        play_count = sum(1 for item in recent_tracks['items'] 
+                        if item['track']['id'] == track_id)
+        
+        # Get user's top tracks to see if this is a favorite
         try:
-            for time_range in ['short_term', 'medium_term']:
-                top_tracks = sp.current_user_top_tracks(time_range=time_range, limit=50)
-                top_track_ids.update(track['id'] for track in top_tracks['items'])
+            top_tracks_short = sp.current_user_top_tracks(time_range='short_term', limit=50)
+            top_tracks_medium = sp.current_user_top_tracks(time_range='medium_term', limit=50)
+            
+            is_top_track = any(track['id'] == track_id 
+                             for track in top_tracks_short['items'] + top_tracks_medium['items'])
+            
+            # Calculate familiarity score (0-100)
+            base_score = min(play_count * 15, 60)  # Recent plays worth up to 60 points
+            top_bonus = 40 if is_top_track else 0  # Top tracks get 40 bonus points
+            
+            return min(base_score + top_bonus, 100)
+            
         except Exception:
-            pass  # Continue without top tracks if it fails
-        
-        # Calculate scores for all tracks
-        familiarity_scores = {}
-        for track_id in track_ids:
-            play_count = recent_counts.get(track_id, 0)
-            base_score = min(play_count * 15, 60)
-            top_bonus = 40 if track_id in top_track_ids else 0
-            familiarity_scores[track_id] = min(base_score + top_bonus, 100)
-        
-        return familiarity_scores
-        
+            # If top tracks fails, just use play count
+            return min(play_count * 20, 100)
+            
     except Exception as e:
-        logger.warning(f"Could not calculate familiarity batch: {e}")
-        # Return random scores as fallback
-        return {track_id: random.randint(0, 100) for track_id in track_ids}
-
-
+        logger.warning(f"Could not calculate familiarity for track {track_id}: {e}")
+        # Return random score as fallback (for demo purposes)
+        return random.randint(0, 100)
 
 def get_spotify_genres_from_tracks(tracks, sp):
     """Fetch genres from tracks' artists."""
@@ -435,26 +343,8 @@ def validate_playlist_url(url):
     return True, ""
 
 def render_fetch_music_page():
-    """Render the music fetching page with authentication status."""
+    """Render the music fetching page."""
     st.header("🎵 Choose Your Music Source")
-    
-    # Show authentication status
-    try:
-        sp = get_spotify_client()
-        user_info = sp.current_user()
-        st.success(f"✅ Logged in as: **{user_info['display_name']}**")
-        
-        # Add logout option in sidebar or small button
-        with st.sidebar:
-            if st.button("🚪 Logout"):
-                clear_spotify_cache()
-                for key in list(st.session_state.keys()):
-                    del st.session_state[key]
-                st.query_params.clear()
-                st.rerun()
-    except:
-        # This will trigger the authentication flow in get_spotify_client()
-        return
     
     fetch_choice = st.radio(
         "What music would you like to analyze?",
@@ -493,21 +383,16 @@ def render_fetch_music_page():
                 st.error("No music data could be fetched. Please try again.")
                 return
 
-            progress_bar.progress(80, text="Calculating familiarity scores...")
+            progress_bar.progress(90, text="Calculating familiarity scores...")
             
             sp = get_spotify_client()
             
-            # Get all track IDs at once
-            track_ids = [track['track']['id'] for track in data if track.get('track', {}).get('id')]
-            
-            # Calculate familiarity scores in batch
-            familiarity_scores = calculate_real_familiarity_batch(track_ids, sp)
-            
-            # Assign scores to tracks
-            for track in data:
-                track_id = track.get('track', {}).get('id')
-                if track_id:
-                    track['familiarity_score'] = familiarity_scores.get(track_id, 0)
+            # Add familiarity scores
+            for i, track in enumerate(data):
+                track['familiarity_score'] = calculate_real_familiarity(track['track']['id'], sp)
+                if i % 10 == 0:  # Update progress every 10 tracks
+                    progress = 90 + int((i / len(data)) * 10)
+                    progress_bar.progress(progress, text=f"Analyzing familiarity... ({i+1}/{len(data)})")
 
             progress_bar.progress(100, text="Complete!")
             
