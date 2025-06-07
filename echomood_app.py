@@ -86,8 +86,8 @@ def get_spotify_client():
         client_id, client_secret = get_spotify_credentials()
         
         auth_manager = SpotifyOAuth(
-            client_id=client_id,
-            client_secret=client_secret,
+            client_id="50c0b9c6df1c43db8866ec8e019f4e96",
+            client_secret="64f63986097447d0a9f0481e9166b7e4",
             redirect_uri=Config.REDIRECT_URI,
             scope=" ".join(Config.SCOPES),  # Fixed: Convert list to string
             open_browser=False,
