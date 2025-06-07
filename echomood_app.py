@@ -9,9 +9,6 @@ import time
 import os
 from datetime import datetime, timedelta
 import logging
-import base64
-import hashlib
-import secrets
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,11 +26,7 @@ def initialize_session_state():
         "selected_familiarity": 50,
         "filtered_music_data": [],
         "playlist_name": "",
-        "spotify_client": None,
-        "auth_token": None,
-        "user_authenticated": False,
-        "auth_state": None,
-        "code_verifier": None
+        "spotify_client": None
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -44,7 +37,8 @@ initialize_session_state()
 
 # Configuration
 class Config:
-    REDIRECT_URI = "https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app/"
+    REDIRECT_URI = "https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app/"  # Added trailing slash
+    CACHE_PATH = ".cache"
     SCOPES = [
         "user-library-read",
         "playlist-modify-public", 
@@ -56,11 +50,11 @@ class Config:
 def get_spotify_credentials():
     """Get Spotify credentials from environment variables or Streamlit secrets."""
     try:
-        # Hardcoded credentials (you should move these to secrets in production)
+        # Try environment variables first
         client_id = "50c0b9c6df1c43db8866ec8e019f4e96"
         client_secret = "64f63986097447d0a9f0481e9166b7e4"
         
-        # Try Streamlit secrets as backup
+        # If not found, try Streamlit secrets
         if not client_id or not client_secret:
             if hasattr(st, 'secrets') and 'SPOTIFY_CLIENT_ID' in st.secrets:
                 client_id = st.secrets["SPOTIFY_CLIENT_ID"]
@@ -68,6 +62,17 @@ def get_spotify_credentials():
         
         if not client_id or not client_secret:
             st.error("🔐 **Spotify API credentials not found!**")
+            st.write("Please set up your credentials:")
+            st.code("""
+# Option 1: Environment variables
+export SPOTIFY_CLIENT_ID="your_client_id"
+export SPOTIFY_CLIENT_SECRET="your_client_secret"
+
+# Option 2: Streamlit secrets (.streamlit/secrets.toml)
+[secrets]
+SPOTIFY_CLIENT_ID = "your_client_id"  
+SPOTIFY_CLIENT_SECRET = "your_client_secret"
+            """)
             st.stop()
             
         return client_id, client_secret
@@ -88,290 +93,125 @@ def clear_spotify_cache():
         logger.warning(f"Could not clear cache: {e}")
 
 
-def generate_pkce_params():
-    """Generate PKCE parameters for secure OAuth flow."""
-    code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
-    code_challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(code_verifier.encode('utf-8')).digest()
-    ).decode('utf-8').rstrip('=')
-    return code_verifier, code_challenge
-
-
-def create_auth_url():
-    """Create Spotify authorization URL with PKCE."""
-    client_id, _ = get_spotify_credentials()
-    
-    # Generate PKCE parameters
-    code_verifier, code_challenge = generate_pkce_params()
-    st.session_state.code_verifier = code_verifier
-    
-    # Generate state parameter for security
-    state = secrets.token_urlsafe(32)
-    st.session_state.auth_state = state
-    
-    params = {
-        'client_id': client_id,
-        'response_type': 'code',
-        'redirect_uri': Config.REDIRECT_URI,
-        'scope': ' '.join(Config.SCOPES),
-        'code_challenge_method': 'S256',
-        'code_challenge': code_challenge,
-        'state': state,
-        'show_dialog': 'true'
-    }
-    
-    auth_url = f"https://accounts.spotify.com/authorize?{urllib.parse.urlencode(params)}"
-    return auth_url
-
-
-
-
-def exchange_code_for_token(auth_code, state):
-    """Exchange authorization code for access token."""
-    try:
-        # Verify state parameter
-        if state != st.session_state.get('auth_state'):
-            raise Exception("Invalid state parameter - possible CSRF attack")
-        
-        client_id, client_secret = get_spotify_credentials()
-        
-        # Prepare token request
-        token_url = "https://accounts.spotify.com/api/token"
-        
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
-        
-        data = {
-            'grant_type': 'authorization_code',
-            'code': auth_code,
-            'redirect_uri': Config.REDIRECT_URI,
-            'client_id': client_id,
-            'client_secret': client_secret,
-            'code_verifier': st.session_state.get('code_verifier')
-        }
-        
-        response = requests.post(token_url, headers=headers, data=data)
-        
-        if response.status_code == 200:
-            token_data = response.json()
-            
-            # Store token data in session state
-            st.session_state.auth_token = {
-                'access_token': token_data['access_token'],
-                'refresh_token': token_data.get('refresh_token'),
-                'expires_at': time.time() + token_data.get('expires_in', 3600),
-                'scope': token_data.get('scope', ''),
-                'token_type': token_data.get('token_type', 'Bearer')
-            }
-            
-            st.session_state.user_authenticated = True
-            return True
-        else:
-            logger.error(f"Token exchange failed: {response.status_code} - {response.text}")
-            return False
-            
-    except Exception as e:
-        logger.error(f"Error exchanging code for token: {e}")
-        return False
-
-
-
-def refresh_access_token():
-    """Refresh the access token using refresh token."""
-    try:
-        if not st.session_state.auth_token or not st.session_state.auth_token.get('refresh_token'):
-            return False
-        
-        client_id, client_secret = get_spotify_credentials()
-        
-        token_url = "https://accounts.spotify.com/api/token"
-        
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
-        
-        data = {
-            'grant_type': 'refresh_token',
-            'refresh_token': st.session_state.auth_token['refresh_token'],
-            'client_id': client_id,
-            'client_secret': client_secret
-        }
-        
-        response = requests.post(token_url, headers=headers, data=data)
-        
-        if response.status_code == 200:
-            token_data = response.json()
-            
-            # Update token data
-            st.session_state.auth_token.update({
-                'access_token': token_data['access_token'],
-                'expires_at': time.time() + token_data.get('expires_in', 3600)
-            })
-            
-            # Keep existing refresh token if not provided
-            if 'refresh_token' in token_data:
-                st.session_state.auth_token['refresh_token'] = token_data['refresh_token']
-            
-            return True
-        else:
-            logger.error(f"Token refresh failed: {response.status_code} - {response.text}")
-            return False
-            
-    except Exception as e:
-        logger.error(f"Error refreshing token: {e}")
-        return False
-
-
-
-
-def is_token_valid():
-    """Check if the current token is valid and not expired."""
-    if not st.session_state.auth_token:
-        return False
-    
-    # Check if token is expired (with 5 minute buffer)
-    if time.time() >= st.session_state.auth_token.get('expires_at', 0) - 300:
-        # Try to refresh the token
-        if st.session_state.auth_token.get('refresh_token'):
-            return refresh_access_token()
-        else:
-            return False
-    
-    return True
-
-
 
 
 def get_spotify_client():
     """Get authenticated Spotify client with improved error handling."""
     try:
-        # Check URL parameters for authorization code
+        client_id, client_secret = get_spotify_credentials()
+        
+        auth_manager = SpotifyOAuth(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=Config.REDIRECT_URI,
+            scope=" ".join(Config.SCOPES),
+            open_browser=False,
+            cache_path=Config.CACHE_PATH,
+            show_dialog=True
+        )
+
+        # Check for authentication code in URL
         query_params = st.query_params
-        
-        if "code" in query_params and "state" in query_params:
-            auth_code = query_params["code"]
-            state = query_params["state"]
-            
-            # Clear URL parameters immediately
-            st.query_params.clear()
-            
-            # Exchange code for token
-            if exchange_code_for_token(auth_code, state):
-                st.success("✅ Authentication successful!")
+        if "code" in query_params:
+            code = query_params["code"]
+            try:
+                token_info = auth_manager.get_access_token(code)
+                if token_info:
+                    st.query_params.clear()
+                    return spotipy.Spotify(auth_manager=auth_manager)
+            except Exception as e:
+                st.error(f"Authentication failed: {e}")
+                clear_spotify_cache()
+                st.query_params.clear()
                 st.rerun()
-            else:
-                st.error("❌ Authentication failed. Please try again.")
-                st.session_state.user_authenticated = False
-                st.rerun()
-        
-        # Check if we have a valid token
-        if not is_token_valid():
-            st.session_state.user_authenticated = False
-            return None
-        
-        # Create Spotify client with current token
-        sp = spotipy.Spotify(auth=st.session_state.auth_token['access_token'])
-        
-        # Test the connection
+
+        # Try to get cached token
         try:
-            user_info = sp.current_user()
-            st.session_state.user_authenticated = True
-            return sp
+            token_info = auth_manager.get_cached_token()
+            if token_info:
+                sp = spotipy.Spotify(auth_manager=auth_manager)
+                sp.current_user()  # Test API call
+                return sp
         except Exception as e:
-            logger.error(f"Spotify API test failed: {e}")
-            st.session_state.user_authenticated = False
-            st.session_state.auth_token = None
-            return None
-            
-    except Exception as e:
-        logger.error(f"Error getting Spotify client: {e}")
-        st.session_state.user_authenticated = False
-        return None
+            logger.info(f"Cached token invalid: {e}")
+            clear_spotify_cache()
 
-
-
-
-def clear_authentication():
-    """Clear all authentication data."""
-    st.session_state.auth_token = None
-    st.session_state.user_authenticated = False
-    st.session_state.auth_state = None
-    st.session_state.code_verifier = None
-    st.session_state.spotify_client = None
-
-def render_authentication_page():
-    """Render a clean authentication page."""
-    st.markdown("### 🎵 Welcome to EchoMood")
-    st.markdown("Connect your Spotify account to discover music that matches your mood!")
-    
-    # Create columns for better layout
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
-        st.markdown("""
-        <div style="text-align: center; padding: 2rem; background: rgba(255,255,255,0.1); border-radius: 15px; margin: 2rem 0;">
-            <h4>🔐 Spotify Authentication Required</h4>
-            <p>To create personalized playlists, we need access to your Spotify account.</p>
-            <p><strong>We will only:</strong></p>
-            <ul style="text-align: left; display: inline-block;">
-                <li>Read your saved songs and playlists</li>
-                <li>Create new playlists for you</li>
-                <li>Analyze your music preferences</li>
-            </ul>
-            <p><em>Your privacy and data security are our top priorities.</em></p>
-        </div>
-        """, unsafe_allow_html=True)
+        # Need to authenticate - show login instructions
+        st.markdown("### 🔐 Spotify Authentication Required")
         
-        # Create authentication button
-        auth_url = create_auth_url()
+        auth_url = auth_manager.get_authorize_url()
         
-        st.markdown(f"""
-        <div style="text-align: center; margin: 20px 0;">
-            <a href="{auth_url}" target="_self" style="
-                background: linear-gradient(45deg, #1DB954, #1ed760);
-                color: white;
-                padding: 15px 40px;
-                text-decoration: none;
-                border-radius: 30px;
-                font-weight: bold;
-                font-size: 18px;
-                display: inline-block;
-                margin: 10px;
-                box-shadow: 0 6px 20px rgba(29, 185, 84, 0.4);
-                transition: all 0.3s ease;
-                border: none;
-            " onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 8px 25px rgba(29, 185, 84, 0.6)';" 
-               onmouseout="this.style.transform='translateY(0px)'; this.style.boxShadow='0 6px 20px rgba(29, 185, 84, 0.4)';">
-                🎵 Connect to Spotify
-            </a>
-        </div>
-        """, unsafe_allow_html=True)
+        # Show the authentication URL that users need to copy/paste
+        st.markdown("**Please follow these steps:**")
+        st.markdown("1. Copy the URL below")
+        st.markdown("2. Paste it in a new browser tab")
+        st.markdown("3. Log in to Spotify and authorize the app")
+        st.markdown("4. You'll be redirected back here automatically")
         
-        st.markdown("*Click the button above to securely connect your Spotify account*")
-    
-    # Troubleshooting section
-    with st.expander("🔧 Having Issues?"):
-        st.markdown("""
-        **Common solutions:**
+        st.code(auth_url, language="text")
         
-        1. **Pop-up blocked?** Make sure your browser allows pop-ups for this site
-        2. **Already connected?** Try refreshing the page
-        3. **Still not working?** Clear your browser cache and try again
+        # Manual authentication code input as backup
+        st.markdown("---")
+        st.markdown("**Alternative: Manual Code Entry**")
+        st.markdown("If the redirect doesn't work, you can manually enter the authorization code:")
         
-        If you continue having issues, the authentication should redirect you back automatically after authorization.
-        """)
+        manual_code = st.text_input(
+            "Enter authorization code from URL:", 
+            help="After authorizing, copy the 'code' parameter from the redirect URL"
+        )
         
-        col1, col2 = st.columns(2)
+        if manual_code:
+            try:
+                token_info = auth_manager.get_access_token(manual_code)
+                if token_info:
+                    st.success("Authentication successful!")
+                    return spotipy.Spotify(auth_manager=auth_manager)
+            except Exception as e:
+                st.error(f"Manual authentication failed: {e}")
+        
+        # Utility buttons
+        col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
             if st.button("🔄 Refresh Page"):
                 st.rerun()
         with col2:
-            if st.button("🗑️ Clear Session"):
-                clear_authentication()
+            if st.button("🗑️ Clear Cache"):
+                clear_spotify_cache()
                 st.rerun()
-                
-
+        with col3:
+            if st.button("📋 Copy URL", help="Click to highlight the URL for copying"):
+                st.info("URL is displayed above - select and copy it")
+        
+        # Troubleshooting
+        with st.expander("🔧 Troubleshooting"):
+            st.write("**Common solutions:**")
+            st.write("• **Copy/Paste Method:** Copy the URL above and paste in a new tab")
+            st.write("• **Check Redirect URI:** Ensure your Spotify app settings have the correct redirect URI")
+            st.write("• **Clear Browser Cache:** Try clearing your browser cache and cookies")
+            st.write("• **Try Different Browser:** Some browsers block redirects more aggressively")
+            st.write("• **Disable Ad Blockers:** They may interfere with Spotify authentication")
+            st.write("")
+            st.write(f"**Your Redirect URI should be:** `{Config.REDIRECT_URI}`")
+        
+        st.stop()
+    
+    except Exception as e:
+        st.error(f"❌ Authentication Error: {e}")
+        
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("🔄 Retry"):
+                clear_spotify_cache()
+                st.rerun()
+        with col2:
+            if st.button("🆕 Reset All"):
+                clear_spotify_cache()
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.query_params.clear()
+                st.rerun()
+        
+        st.stop()
 
 
 def calculate_real_familiarity_batch(track_ids, sp):
@@ -455,9 +295,6 @@ def get_spotify_data(fetch_type, playlist_url=None, progress_bar=None):
     """Fetch music data from Spotify."""
     try:
         sp = get_spotify_client()
-        if not sp:
-            return []
-            
         results = []
         offset = 0
         total = 0
@@ -539,7 +376,6 @@ def get_spotify_data(fetch_type, playlist_url=None, progress_bar=None):
     except Exception as e:
         st.error(f"Error fetching music data: {e}")
         return []
-
 
 def filter_by_audio_features(tracks, mood_params, sp, tolerance=0.3):
     """Filter tracks based on audio features matching mood parameters."""
@@ -685,12 +521,6 @@ def render_fetch_music_page():
 
 def render_mood_selection_page():
     """Render the mood and genre selection page."""
-    # Check authentication
-    sp = get_spotify_client()
-    if not sp or not st.session_state.user_authenticated:
-        render_authentication_page()
-        return
-    
     st.header("🎼 Customize Your Mood")
     
     # Fetch genres if not already done
