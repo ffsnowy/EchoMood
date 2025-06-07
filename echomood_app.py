@@ -26,7 +26,8 @@ def initialize_session_state():
         "selected_familiarity": 50,
         "filtered_music_data": [],
         "playlist_name": "",
-        "spotify_client": None
+        "spotify_client": None,
+        "auth_manager": None
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -37,8 +38,9 @@ initialize_session_state()
 
 # Configuration
 class Config:
-    REDIRECT_URI = "https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app"
-    CACHE_PATH = ".cache"
+    # IMPORTANT: Update this to match your Spotify app settings
+    REDIRECT_URI = "https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app/"
+    CACHE_PATH = ".spotify_cache"
     SCOPES = [
         "user-library-read",
         "playlist-modify-public", 
@@ -48,39 +50,78 @@ class Config:
     ]
 
 def get_spotify_credentials():
-    """Get Spotify credentials from environment variables or Streamlit secrets."""
+    """Get Spotify credentials from Streamlit secrets or environment variables."""
     try:
-        # Try environment variables first
-        client_id = "50c0b9c6df1c43db8866ec8e019f4e96"
-        client_secret = "64f63986097447d0a9f0481e9166b7e4"
-        
-        # If not found, try Streamlit secrets
-        if not client_id or not client_secret:
-            if hasattr(st, 'secrets') and 'SPOTIFY_CLIENT_ID' in st.secrets:
-                client_id = st.secrets["SPOTIFY_CLIENT_ID"]
-                client_secret = st.secrets["SPOTIFY_CLIENT_SECRET"]
-        
-        if not client_id or not client_secret:
-            st.error("🔐 **Spotify API credentials not found!**")
-            st.write("Please set up your credentials:")
-            st.code("""
-# Option 1: Environment variables
-export SPOTIFY_CLIENT_ID="your_client_id"
-export SPOTIFY_CLIENT_SECRET="your_client_secret"
-
-# Option 2: Streamlit secrets (.streamlit/secrets.toml)
-[secrets]
-SPOTIFY_CLIENT_ID = "your_client_id"  
-SPOTIFY_CLIENT_SECRET = "your_client_secret"
-            """)
-            st.stop()
+        # First try Streamlit secrets
+        if hasattr(st, 'secrets'):
+            client_id = st.secrets.get("SPOTIFY_CLIENT_ID", None)
+            client_secret = st.secrets.get("SPOTIFY_CLIENT_SECRET", None)
             
-        return client_id, client_secret
+            if client_id and client_secret:
+                return client_id, client_secret
+        
+        # Then try environment variables
+        client_id = os.getenv("SPOTIFY_CLIENT_ID")
+        client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
+        
+        if client_id and client_secret:
+            return client_id, client_secret
+            
+        # If no credentials found, show setup instructions
+        st.error("🔐 **Spotify API credentials not found!**")
+        st.info("**For Streamlit Cloud deployment:**")
+        st.markdown("""
+        1. Go to your app settings on Streamlit Cloud
+        2. Navigate to Secrets
+        3. Add the following:
+        ```toml
+        SPOTIFY_CLIENT_ID = "your_client_id"
+        SPOTIFY_CLIENT_SECRET = "your_client_secret"
+        ```
+        """)
+        
+        st.info("**For local development:**")
+        st.markdown("""
+        Create a `.streamlit/secrets.toml` file with:
+        ```toml
+        SPOTIFY_CLIENT_ID = "your_client_id"
+        SPOTIFY_CLIENT_SECRET = "your_client_secret"
+        ```
+        """)
+        st.write("Spotify Client ID:", st.secrets.get("SPOTIFY_CLIENT_ID", "Not found"))
+
+        
+        # Temporary solution - allow manual input
+        with st.expander("🔧 Enter credentials manually (temporary)"):
+            col1, col2 = st.columns(2)
+            with col1:
+                temp_id = st.text_input("Client ID", type="password")
+            with col2:
+                temp_secret = st.text_input("Client Secret", type="password")
+            
+            if temp_id and temp_secret:
+                return temp_id, temp_secret
+        
+        st.stop()
+            
     except Exception as e:
         st.error(f"Error loading credentials: {e}")
         st.stop()
 
-def get_spotify_client():
+def clear_spotify_cache():
+    """Clear Spotify authentication cache."""
+    try:
+        if os.path.exists(Config.CACHE_PATH):
+            os.remove(Config.CACHE_PATH)
+        # Clear from session state
+        if 'spotify_client' in st.session_state:
+            st.session_state['spotify_client'] = None
+        if 'auth_manager' in st.session_state:
+            st.session_state['auth_manager'] = None
+    except Exception as e:
+        logger.warning(f"Could not clear cache: {e}")
+
+def get_auth_manager():
     """Get authenticated Spotify client - REMOVED @st.cache_resource to fix widget error."""
     try:
         client_id, client_secret = get_spotify_credentials()
@@ -122,7 +163,140 @@ def get_spotify_client():
         st.error(f"Failed to authenticate with Spotify: {e}")
         st.write("Please check your credentials and try again.")
         st.stop()
-    
+    return st.session_state.auth_manager
+
+def get_spotify_client():
+    """Get authenticated Spotify client with improved error handling."""
+    try:
+        # Check if we already have a client
+        if st.session_state.spotify_client is not None:
+            try:
+                # Test if the client is still valid
+                st.session_state.spotify_client.current_user()
+                return st.session_state.spotify_client
+            except:
+                st.session_state.spotify_client = None
+        
+        auth_manager = get_auth_manager()
+        
+        # Check URL parameters for auth code
+        query_params = st.query_params
+        if "code" in query_params:
+            code = query_params["code"]
+            try:
+                # Exchange code for token
+                token_info = auth_manager.get_access_token(code, as_dict=True)
+                if token_info:
+                    # Clear the code from URL
+                    st.query_params.clear()
+                    # Create client
+                    st.session_state.spotify_client = spotipy.Spotify(auth_manager=auth_manager)
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Authentication failed: {e}")
+                clear_spotify_cache()
+                st.query_params.clear()
+                if st.button("🔄 Retry Authentication"):
+                    st.rerun()
+                st.stop()
+        
+        # Check for error in URL (user denied access)
+        if "error" in query_params:
+            st.error("❌ Authentication was denied. Please try again.")
+            st.query_params.clear()
+            if st.button("🔄 Retry Authentication"):
+                st.rerun()
+            st.stop()
+        
+        # Try to get cached token
+        token_info = auth_manager.get_cached_token()
+        if token_info and not auth_manager.is_token_expired(token_info):
+            st.session_state.spotify_client = spotipy.Spotify(auth_manager=auth_manager)
+            return st.session_state.spotify_client
+        
+        # Need new authentication
+        auth_url = auth_manager.get_authorize_url()
+        
+        st.markdown("### 🎵 Welcome to EchoMood!")
+        st.markdown("To create personalized playlists, you need to connect your Spotify account.")
+        
+        # Create columns for better layout
+        col1, col2, col3 = st.columns([1, 2, 1])
+        
+        with col2:
+            st.markdown("#### 🔐 Connect with Spotify")
+            
+            # Show the auth link prominently
+            st.markdown(f"""
+            <div style='text-align: center; padding: 20px; background-color: #1DB954; border-radius: 10px; margin: 20px 0;'>
+                <a href="{auth_url}" target="_self" style='color: white; text-decoration: none; font-size: 18px; font-weight: bold;'>
+                    🎵 Connect Spotify Account
+                </a>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.info("**Note:** You'll be redirected to Spotify to log in, then back to this app.")
+        
+        # Alternative method
+        with st.expander("🔧 Alternative: Manual Authentication"):
+            st.markdown("If the button doesn't work, you can manually authenticate:")
+            st.markdown("1. Copy this URL and paste it in a new browser tab:")
+            st.code(auth_url, language="text")
+            
+            st.markdown("2. After authorizing, you'll be redirected. Copy the entire URL from your browser.")
+            
+            redirect_url = st.text_input(
+                "3. Paste the redirect URL here:",
+                placeholder="https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app/?code=..."
+            )
+            
+            if redirect_url and "code=" in redirect_url:
+                try:
+                    # Extract code from URL
+                    parsed = urllib.parse.urlparse(redirect_url)
+                    code = urllib.parse.parse_qs(parsed.query).get('code', [None])[0]
+                    
+                    if code:
+                        token_info = auth_manager.get_access_token(code, as_dict=True)
+                        if token_info:
+                            st.session_state.spotify_client = spotipy.Spotify(auth_manager=auth_manager)
+                            st.success("✅ Authentication successful!")
+                            time.sleep(1)
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to authenticate: {e}")
+        
+        # Help section
+        with st.expander("❓ Having trouble?"):
+            st.markdown("""
+            **Common issues:**
+            - Make sure you're using the correct Spotify account
+            - Check that pop-ups are not blocked
+            - Try clearing your browser cache
+            - Ensure your Spotify app redirect URI is set to:
+              ```
+              https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app/
+              ```
+            """)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🗑️ Clear Cache"):
+                    clear_spotify_cache()
+                    st.rerun()
+            with col2:
+                if st.button("🔄 Refresh Page"):
+                    st.rerun()
+        
+        st.stop()
+        
+    except Exception as e:
+        st.error(f"❌ Authentication Error: {e}")
+        if st.button("🔄 Retry"):
+            clear_spotify_cache()
+            st.rerun()
+        st.stop()
+
 def calculate_real_familiarity_batch(track_ids, sp):
     """Calculate familiarity scores for multiple tracks efficiently."""
     try:
@@ -154,8 +328,6 @@ def calculate_real_familiarity_batch(track_ids, sp):
         logger.warning(f"Could not calculate familiarity batch: {e}")
         # Return random scores as fallback
         return {track_id: random.randint(0, 100) for track_id in track_ids}
-
-
 
 def get_spotify_genres_from_tracks(tracks, sp):
     """Fetch genres from tracks' artists."""
@@ -517,88 +689,92 @@ def render_mood_selection_page():
         for label, value in mood_labels.values():
             st.progress(value, text=f"{label}: {value:.2f}")
 
-    if st.button("✨ Apply Mood Settings", type="primary"):
-        # Store selections
-        st.session_state.selected_genres = selected_genres
-        st.session_state.selected_mood = {
-            "valence": valence,
-            "energy": energy,
-            "danceability": danceability,
-            "acousticness": acousticness,
-            "instrumentalness": instrumentalness,
-            "liveness": liveness
-        }
-        st.session_state.selected_familiarity = familiarity
+    # Apply button
+    st.markdown("<br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("✨ Apply Mood Settings", type="primary", use_container_width=True):
+            # Store selections
+            st.session_state.selected_genres = selected_genres
+            st.session_state.selected_mood = {
+                "valence": valence,
+                "energy": energy,
+                "danceability": danceability,
+                "acousticness": acousticness,
+                "instrumentalness": instrumentalness,
+                "liveness": liveness
+            }
+            st.session_state.selected_familiarity = familiarity
 
-        # Filter music based on selections
-        with st.spinner("🎯 Filtering tracks to match your mood..."):
-            sp = get_spotify_client()
-            
-            # Start with all tracks
-            filtered_tracks = st.session_state.music_data.copy()
-            
-            # Filter by familiarity
-            familiarity_threshold = familiarity
-            filtered_tracks = [
-                track for track in filtered_tracks 
-                if track['familiarity_score'] >= familiarity_threshold
-            ]
-            
-            # Filter by genres if any selected
-            if selected_genres:
-                genre_filtered = []
-                track_genres_map = {}
+            # Filter music based on selections
+            with st.spinner("🎯 Filtering tracks to match your mood..."):
+                sp = get_spotify_client()
                 
-                # Get genres for filtering
-                artist_ids = set()
-                for item in st.session_state.music_data:
-                    if 'track' in item and item['track'] and 'artists' in item['track']:
-                        for artist in item['track']['artists']:
-                            if artist.get('id'):
-                                artist_ids.add(artist['id'])
-
-                # Fetch artist genres in batches
-                artist_genres = {}
-                artist_ids = list(artist_ids)
+                # Start with all tracks
+                filtered_tracks = st.session_state.music_data.copy()
                 
-                for i in range(0, len(artist_ids), 50):
-                    batch = artist_ids[i:i+50]
-                    try:
-                        results = sp.artists(batch)
-                        for artist in results['artists']:
-                            if artist:
-                                artist_genres[artist['id']] = artist.get('genres', [])
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch artist genres: {e}")
-                        continue
-
-                # Filter tracks by genre
-                for track in filtered_tracks:
-                    if 'track' in track and track['track'] and 'artists' in track['track']:
-                        track_artist_ids = [artist['id'] for artist in track['track']['artists']]
-                        track_genres = set()
-                        for artist_id in track_artist_ids:
-                            track_genres.update(artist_genres.get(artist_id, []))
-                        
-                        # Check if any selected genre matches track genres
-                        if any(genre.lower() in [tg.lower() for tg in track_genres] for genre in selected_genres):
-                            genre_filtered.append(track)
+                # Filter by familiarity
+                familiarity_threshold = familiarity
+                filtered_tracks = [
+                    track for track in filtered_tracks 
+                    if track.get('familiarity_score', 0) >= familiarity_threshold
+                ]
                 
-                filtered_tracks = genre_filtered if genre_filtered else filtered_tracks
+                # Filter by genres if any selected
+                if selected_genres:
+                    genre_filtered = []
+                    track_genres_map = {}
+                    
+                    # Get genres for filtering
+                    artist_ids = set()
+                    for item in st.session_state.music_data:
+                        if 'track' in item and item['track'] and 'artists' in item['track']:
+                            for artist in item['track']['artists']:
+                                if artist.get('id'):
+                                    artist_ids.add(artist['id'])
 
-            # Filter by audio features/mood
-            filtered_tracks = filter_by_audio_features(
-                filtered_tracks, st.session_state.selected_mood, sp
-            )
+                    # Fetch artist genres in batches
+                    artist_genres = {}
+                    artist_ids = list(artist_ids)
+                    
+                    for i in range(0, len(artist_ids), 50):
+                        batch = artist_ids[i:i+50]
+                        try:
+                            results = sp.artists(batch)
+                            for artist in results['artists']:
+                                if artist:
+                                    artist_genres[artist['id']] = artist.get('genres', [])
+                        except Exception as e:
+                            logger.warning(f"Failed to fetch artist genres: {e}")
+                            continue
 
-            st.session_state.filtered_music_data = filtered_tracks
+                    # Filter tracks by genre
+                    for track in filtered_tracks:
+                        if 'track' in track and track['track'] and 'artists' in track['track']:
+                            track_artist_ids = [artist['id'] for artist in track['track']['artists'] if artist.get('id')]
+                            track_genres = set()
+                            for artist_id in track_artist_ids:
+                                track_genres.update(artist_genres.get(artist_id, []))
+                            
+                            # Check if any selected genre matches track genres
+                            if any(genre.lower() in [tg.lower() for tg in track_genres] for genre in selected_genres):
+                                genre_filtered.append(track)
+                    
+                    filtered_tracks = genre_filtered if genre_filtered else filtered_tracks
 
-        if filtered_tracks:
-            st.success(f"🎯 Found {len(filtered_tracks)} tracks matching your criteria!")
-            st.session_state.page = "playlist_details"
-            st.rerun()
-        else:
-            st.warning("😔 No tracks match your criteria. Try adjusting your settings and try again.")
+                # Filter by audio features/mood
+                filtered_tracks = filter_by_audio_features(
+                    filtered_tracks, st.session_state.selected_mood, sp
+                )
+
+                st.session_state.filtered_music_data = filtered_tracks
+
+            if filtered_tracks:
+                st.success(f"🎯 Found {len(filtered_tracks)} tracks matching your criteria!")
+                st.session_state.page = "playlist_details"
+                st.rerun()
+            else:
+                st.warning("😔 No tracks match your criteria. Try adjusting your settings.")
 
 def render_playlist_details_page():
     """Render the playlist creation page."""
@@ -658,64 +834,73 @@ def render_playlist_details_page():
         st.write(f"... and {len(filtered_data) - preview_count} more tracks")
 
     # Create playlist button
-    if st.button("🚀 Create Playlist", type="primary"):
-        if not playlist_name.strip():
-            st.error("Please enter a playlist name!")
-            return
+    st.markdown("<br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🚀 Create Playlist", type="primary", use_container_width=True):
+            if not playlist_name.strip():
+                st.error("Please enter a playlist name!")
+                return
 
-        try:
-            with st.spinner("🎵 Creating your playlist..."):
-                sp = get_spotify_client()
-                user_id = sp.current_user()['id']
-                
-                # Create the playlist
-                new_playlist = sp.user_playlist_create(
-                    user_id, 
-                    playlist_name.strip(), 
-                    public=make_public,
-                    description=f"Created with EchoMood - A playlist matching your current vibe"
-                )
-                playlist_id = new_playlist['id']
-                
-                # Prepare track IDs
-                track_ids = [
-                    track['track']['id'] 
-                    for track in filtered_data 
-                    if track.get('track', {}).get('id')
-                ]
-
-                if shuffle_enabled:
-                    random.shuffle(track_ids)
-
-                # Limit to requested number of songs
-                track_ids = track_ids[:num_songs]
-
-                # Add tracks in batches of 100
-                progress_bar = st.progress(0, text="Adding tracks to playlist...")
-                
-                for i in range(0, len(track_ids), 100):
-                    batch = track_ids[i:i + 100]
-                    sp.playlist_add_items(playlist_id, batch)
+            try:
+                with st.spinner("🎵 Creating your playlist..."):
+                    sp = get_spotify_client()
+                    user_id = sp.current_user()['id']
                     
-                    progress = int((i + len(batch)) / len(track_ids) * 100)
-                    progress_bar.progress(progress, text=f"Added {i + len(batch)}/{len(track_ids)} tracks...")
+                    # Create the playlist
+                    new_playlist = sp.user_playlist_create(
+                        user_id, 
+                        playlist_name.strip(), 
+                        public=make_public,
+                        description=f"Created with EchoMood - A playlist matching your current vibe"
+                    )
+                    playlist_id = new_playlist['id']
+                    
+                    # Prepare track IDs
+                    track_ids = [
+                        track['track']['id'] 
+                        for track in filtered_data 
+                        if track.get('track', {}).get('id')
+                    ]
 
-                progress_bar.progress(100, text="Playlist created successfully!")
+                    if shuffle_enabled:
+                        random.shuffle(track_ids)
 
-                # Success message
-                st.success(f"🎉 Playlist '{playlist_name}' created successfully!")
-                st.balloons()
-                
-                playlist_url = new_playlist['external_urls']['spotify']
-                st.markdown(f"🎵 **[Open '{playlist_name}' in Spotify →]({playlist_url})**")
-                
-                # Store playlist info
-                st.session_state.playlist_name = playlist_name
-                st.session_state.page = "playlist_created"
+                    # Limit to requested number of songs
+                    track_ids = track_ids[:num_songs]
 
-        except Exception as e:
-            st.error(f"Failed to create playlist: {e}")
-            logger.error(f"Playlist creation error: {e}")
+                    # Add tracks in batches of 100
+                    progress_bar = st.progress(0, text="Adding tracks to playlist...")
+                    
+                    for i in range(0, len(track_ids), 100):
+                        batch = track_ids[i:i + 100]
+                        sp.playlist_add_items(playlist_id, batch)
+                        
+                        progress = int((i + len(batch)) / len(track_ids) * 100)
+                        progress_bar.progress(progress, text=f"Added {i + len(batch)}/{len(track_ids)} tracks...")
+
+                    progress_bar.progress(100, text="Playlist created successfully!")
+
+                    # Success message
+                    st.success(f"🎉 Playlist '{playlist_name}' created successfully!")
+                    st.balloons()
+                    
+                    playlist_url = new_playlist['external_urls']['spotify']
+                    st.markdown(f"""
+                    <div style='text-align: center; padding: 20px; background-color: #1DB954; border-radius: 10px; margin: 20px 0;'>
+                        <a href="{playlist_url}" target="_blank" style='color: white; text-decoration: none; font-size: 18px; font-weight: bold;'>
+                            🎵 Open '{playlist_name}' in Spotify →
+                        </a>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Store playlist info
+                    st.session_state.playlist_name = playlist_name
+                    st.session_state.page = "playlist_created"
+
+            except Exception as e:
+                st.error(f"Failed to create playlist: {e}")
+                logger.error(f"Playlist creation error: {e}")
 
 def render_playlist_created_page():
     """Render the success page after playlist creation."""
@@ -723,15 +908,17 @@ def render_playlist_created_page():
     
     st.success(f"Your playlist '{st.session_state.playlist_name}' is ready to enjoy!")
     
+    st.markdown("<br>", unsafe_allow_html=True)
+    
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("🔄 Create Another Playlist"):
+        if st.button("🔄 Create Another", use_container_width=True):
             st.session_state.page = "mood_and_genre"
             st.rerun()
     
     with col2:
-        if st.button("📱 Use Different Music"):
+        if st.button("📱 Different Music", use_container_width=True):
             st.session_state.page = "fetch_music"
             # Clear previous data
             st.session_state.music_data = []
@@ -740,41 +927,83 @@ def render_playlist_created_page():
             st.rerun()
     
     with col3:
-        if st.button("🏠 Start Over"):
-            # Clear all session state
+        if st.button("🏠 Start Over", use_container_width=True):
+            # Clear all session state except auth
+            keys_to_keep = ['spotify_client', 'auth_manager']
             for key in list(st.session_state.keys()):
-                if key != 'spotify_client':
+                if key not in keys_to_keep:
                     del st.session_state[key]
             initialize_session_state()
             st.rerun()
 
-# Custom CSS
+# Custom CSS with improved button styling
 st.markdown("""
     <style>
-    .main { 
+    /* Main app styling */
+    .stApp {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white; 
     }
-    .stApp > header {
-        background-color: transparent;
-    }
+    
+    /* Button styling */
     .stButton > button {
-        background: linear-gradient(45deg, #1DB954, #1ed760);
+        background-color: #1DB954;
         color: white;
         border: none;
         border-radius: 25px;
+        padding: 0.5rem 1rem;
         font-weight: bold;
+        transition: all 0.3s ease;
     }
+    
     .stButton > button:hover {
-        background: linear-gradient(45deg, #1ed760, #1DB954);
+        background-color: #1ed760;
         transform: translateY(-2px);
-        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.3);
     }
-    h1, h2, h3, h4, p { 
-        font-family: 'Helvetica', sans-serif;
+    
+    /* Primary button styling */
+    .stButton > button[kind="primary"] {
+        background-color: #1DB954;
+        font-size: 1.1rem;
+        padding: 0.75rem 1.5rem;
     }
+    
+    .stButton > button[kind="primary"]:hover {
+        background-color: #1ed760;
+    }
+    
+    /* Headers and text */
+    h1, h2, h3 {
+        color: white;
+    }
+    
+    /* Progress bar */
     .stProgress > div > div {
-        background: linear-gradient(45deg, #1DB954, #1ed760);
+        background-color: #1DB954;
+    }
+    
+    /* Success/Info/Error messages */
+    .stSuccess, .stInfo, .stError {
+        border-radius: 10px;
+    }
+    
+    /* Radio buttons and sliders */
+    .stRadio > label {
+        color: white;
+    }
+    
+    .stSlider > label {
+        color: white;
+    }
+    
+    /* Text input */
+    .stTextInput > label {
+        color: white;
+    }
+    
+    /* Expander */
+    .streamlit-expanderHeader {
+        color: white;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -804,16 +1033,12 @@ def main():
 
     # Footer
     st.markdown("---")
-    st.markdown("**EchoMood** • Made with ❤️ and Streamlit • Powered by Spotify")
+    st.markdown(
+        "<div style='text-align: center; color: white;'>"
+        "<b>EchoMood</b> • Made with ❤️ and Streamlit • Powered by Spotify"
+        "</div>", 
+        unsafe_allow_html=True
+    )
 
 if __name__ == "__main__":
     main()
-# ---------------------------------------------------
-# Please don't delete this: Useful Terminal Commands
-# cd Documents\EchoMood
-# .\venv\Scripts\Activate
-# streamlit run echomood_app.py
-#client_id = "50c0b9c6df1c43db8866ec8e019f4e96"
-#client_secret = "64f63986097447d0a9f0481e9166b7e4
-
-#https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app
