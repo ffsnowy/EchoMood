@@ -88,8 +88,6 @@ def get_spotify_credentials():
         SPOTIFY_CLIENT_SECRET = "your_client_secret"
         ```
         """)
-        st.write("Spotify Client ID:", st.secrets.get("SPOTIFY_CLIENT_ID", "Not found"))
-
         
         # Temporary solution - allow manual input
         with st.expander("🔧 Enter credentials manually (temporary)"):
@@ -121,7 +119,7 @@ def clear_spotify_cache():
     except Exception as e:
         logger.warning(f"Could not clear cache: {e}")
 
-def get_auth_manager():
+def get_spotify_client():
     """Get authenticated Spotify client - REMOVED @st.cache_resource to fix widget error."""
     try:
         client_id, client_secret = get_spotify_credentials()
@@ -134,9 +132,7 @@ def get_auth_manager():
             open_browser=False,
             cache_path=Config.CACHE_PATH
         )
-
         token_info = auth_manager.get_cached_token()
-
         if not token_info:
             query_params = st.query_params
             if "code" in query_params:
@@ -156,145 +152,11 @@ def get_auth_manager():
                 st.markdown(f"[🔐 Click here to log in to Spotify]({auth_url})")
                 st.info("After logging in, you'll be redirected back to this app.")
                 st.stop()
-
         return spotipy.Spotify(auth_manager=auth_manager)
     
     except Exception as e:
         st.error(f"Failed to authenticate with Spotify: {e}")
         st.write("Please check your credentials and try again.")
-        st.stop()
-    return st.session_state.auth_manager
-
-def get_spotify_client():
-    """Get authenticated Spotify client with improved error handling."""
-    try:
-        # Check if we already have a client
-        if st.session_state.spotify_client is not None:
-            try:
-                # Test if the client is still valid
-                st.session_state.spotify_client.current_user()
-                return st.session_state.spotify_client
-            except:
-                st.session_state.spotify_client = None
-        
-        auth_manager = get_auth_manager()
-        
-        # Check URL parameters for auth code
-        query_params = st.query_params
-        if "code" in query_params:
-            code = query_params["code"]
-            try:
-                # Exchange code for token
-                token_info = auth_manager.get_access_token(code, as_dict=True)
-                if token_info:
-                    # Clear the code from URL
-                    st.query_params.clear()
-                    # Create client
-                    st.session_state.spotify_client = spotipy.Spotify(auth_manager=auth_manager)
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Authentication failed: {e}")
-                clear_spotify_cache()
-                st.query_params.clear()
-                if st.button("🔄 Retry Authentication"):
-                    st.rerun()
-                st.stop()
-        
-        # Check for error in URL (user denied access)
-        if "error" in query_params:
-            st.error("❌ Authentication was denied. Please try again.")
-            st.query_params.clear()
-            if st.button("🔄 Retry Authentication"):
-                st.rerun()
-            st.stop()
-        
-        # Try to get cached token
-        token_info = auth_manager.get_cached_token()
-        if token_info and not auth_manager.is_token_expired(token_info):
-            st.session_state.spotify_client = spotipy.Spotify(auth_manager=auth_manager)
-            return st.session_state.spotify_client
-        
-        # Need new authentication
-        auth_url = auth_manager.get_authorize_url()
-        
-        st.markdown("### 🎵 Welcome to EchoMood!")
-        st.markdown("To create personalized playlists, you need to connect your Spotify account.")
-        
-        # Create columns for better layout
-        col1, col2, col3 = st.columns([1, 2, 1])
-        
-        with col2:
-            st.markdown("#### 🔐 Connect with Spotify")
-            
-            # Show the auth link prominently
-            st.markdown(f"""
-            <div style='text-align: center; padding: 20px; background-color: #1DB954; border-radius: 10px; margin: 20px 0;'>
-                <a href="{auth_url}" target="_self" style='color: white; text-decoration: none; font-size: 18px; font-weight: bold;'>
-                    🎵 Connect Spotify Account
-                </a>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            st.info("**Note:** You'll be redirected to Spotify to log in, then back to this app.")
-        
-        # Alternative method
-        with st.expander("🔧 Alternative: Manual Authentication"):
-            st.markdown("If the button doesn't work, you can manually authenticate:")
-            st.markdown("1. Copy this URL and paste it in a new browser tab:")
-            st.code(auth_url, language="text")
-            
-            st.markdown("2. After authorizing, you'll be redirected. Copy the entire URL from your browser.")
-            
-            redirect_url = st.text_input(
-                "3. Paste the redirect URL here:",
-                placeholder="https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app/?code=..."
-            )
-            
-            if redirect_url and "code=" in redirect_url:
-                try:
-                    # Extract code from URL
-                    parsed = urllib.parse.urlparse(redirect_url)
-                    code = urllib.parse.parse_qs(parsed.query).get('code', [None])[0]
-                    
-                    if code:
-                        token_info = auth_manager.get_access_token(code, as_dict=True)
-                        if token_info:
-                            st.session_state.spotify_client = spotipy.Spotify(auth_manager=auth_manager)
-                            st.success("✅ Authentication successful!")
-                            time.sleep(1)
-                            st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to authenticate: {e}")
-        
-        # Help section
-        with st.expander("❓ Having trouble?"):
-            st.markdown("""
-            **Common issues:**
-            - Make sure you're using the correct Spotify account
-            - Check that pop-ups are not blocked
-            - Try clearing your browser cache
-            - Ensure your Spotify app redirect URI is set to:
-              ```
-              https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app/
-              ```
-            """)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🗑️ Clear Cache"):
-                    clear_spotify_cache()
-                    st.rerun()
-            with col2:
-                if st.button("🔄 Refresh Page"):
-                    st.rerun()
-        
-        st.stop()
-        
-    except Exception as e:
-        st.error(f"❌ Authentication Error: {e}")
-        if st.button("🔄 Retry"):
-            clear_spotify_cache()
-            st.rerun()
         st.stop()
 
 def calculate_real_familiarity_batch(track_ids, sp):
