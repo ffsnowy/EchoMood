@@ -40,7 +40,7 @@ initialize_session_state()
 class Config:
     # IMPORTANT: Update this to match your Spotify app settings
     REDIRECT_URI = "https://echomood-ydeurclvwvw8u7zvpeedjc.streamlit.app/"
-    CACHE_PATH = ".spotify_cache"
+    CACHE_PATH = ".cache"
     SCOPES = [
         "user-library-read",
         "playlist-modify-public", 
