@@ -539,19 +539,8 @@ def render_mood_selection_page():
         help="0 = Only new/unfamiliar songs, 100 = Only familiar favorites"
     )
     
-    # Show enhanced mood summary
-    with st.expander("📊 Your Music Library Analysis", expanded=False):
-        current_mood = {
-            "valence": valence,
-            "energy": energy,
-            "danceability": danceability,
-            "acousticness": acousticness,
-            "instrumentalness": instrumentalness,
-            "liveness": liveness
-        }
-        
-        # Show current slider values first
-        st.markdown("**🎯 Your Current Mood Settings:**")
+    # Show selected mood summary
+    with st.expander("📊 Your Mood Summary", expanded=False):
         mood_labels = {
             'valence': ('😊 Happiness', valence),
             'energy': ('⚡ Energy', energy), 
@@ -563,15 +552,6 @@ def render_mood_selection_page():
         
         for label, value in mood_labels.values():
             st.progress(value, text=f"{label}: {value:.2f}")
-        
-        st.markdown("---")
-        
-        # Show enhanced analysis
-        if st.session_state.music_data:
-            sp = get_spotify_client()
-            render_enhanced_mood_summary(current_mood, st.session_state.music_data, sp)
-        else:
-            st.info("Fetch your music first to see detailed analysis!")
 
     # Apply button
     st.markdown("<br>", unsafe_allow_html=True)
@@ -659,184 +639,6 @@ def render_mood_selection_page():
                 st.rerun()
             else:
                 st.warning("😔 No tracks match your criteria. Try adjusting your settings.")
-
-
-def calculate_feature_distribution(tracks, feature_name, sp):
-    """Calculate distribution of audio features across tracks."""
-    if not tracks:
-        return {"low": 0, "medium": 0, "high": 0, "total": 0}
-    
-    try:
-        # Get track IDs
-        track_ids = [t['track']['id'] for t in tracks if t.get('track', {}).get('id')]
-        if not track_ids:
-            return {"low": 0, "medium": 0, "high": 0, "total": 0}
-        
-        feature_values = []
-        
-        # Get audio features in batches
-        for i in range(0, len(track_ids), 100):
-            batch_ids = track_ids[i:i+100]
-            try:
-                features_list = sp.audio_features(batch_ids)
-                for features in features_list:
-                    if features and features.get(feature_name) is not None:
-                        feature_values.append(features[feature_name])
-            except Exception as e:
-                logger.warning(f"Failed to get audio features for batch: {e}")
-                continue
-        
-        if not feature_values:
-            return {"low": 0, "medium": 0, "high": 0, "total": 0}
-        
-        # Calculate distribution
-        low = len([v for v in feature_values if v < 0.33])
-        medium = len([v for v in feature_values if 0.33 <= v < 0.67])
-        high = len([v for v in feature_values if v >= 0.67])
-        
-        return {
-            "low": low,
-            "medium": medium, 
-            "high": high,
-            "total": len(feature_values)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error calculating feature distribution: {e}")
-        return {"low": 0, "medium": 0, "high": 0, "total": 0}
-
-def render_enhanced_mood_summary(mood_params, music_data, sp):
-    """Render enhanced mood summary with song distribution."""
-    
-    # Feature definitions
-    features = [
-        {
-            'key': 'valence',
-            'label': '😊 Happiness',
-            'categories': ['Sad', 'Neutral', 'Happy'],
-            'color': '#FFD700'
-        },
-        {
-            'key': 'energy', 
-            'label': '⚡ Energy',
-            'categories': ['Calm', 'Moderate', 'Energetic'],
-            'color': '#FF6B35'
-        },
-        {
-            'key': 'danceability',
-            'label': '💃 Danceability', 
-            'categories': ['Not Danceable', 'Somewhat', 'Very Danceable'],
-            'color': '#FF1744'
-        },
-        {
-            'key': 'acousticness',
-            'label': '🎸 Acoustic Sound',
-            'categories': ['Electronic', 'Mixed', 'Acoustic'],
-            'color': '#8BC34A'
-        },
-        {
-            'key': 'instrumentalness',
-            'label': '🎼 Instrumental Focus',
-            'categories': ['Vocal', 'Mixed', 'Instrumental'], 
-            'color': '#9C27B0'
-        },
-        {
-            'key': 'liveness',
-            'label': '🎤 Live Recording',
-            'categories': ['Studio', 'Mixed', 'Live'],
-            'color': '#FF9800'
-        }
-    ]
-    
-    # Calculate distributions for each feature
-    distributions = {}
-    with st.spinner("Analyzing your music library..."):
-        for feature in features:
-            distributions[feature['key']] = calculate_feature_distribution(
-                music_data, feature['key'], sp
-            )
-    
-    # Create the enhanced UI
-    st.markdown(f"""
-    <div style='background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%); 
-                border-radius: 15px; padding: 20px; margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);'>
-        <h4 style='color: white; margin-bottom: 15px;'>📊 Your Music Library Analysis</h4>
-        <p style='color: rgba(255,255,255,0.8); margin-bottom: 20px;'>
-            Distribution of {len(music_data)} tracks across mood characteristics
-        </p>
-    """, unsafe_allow_html=True)
-    
-    # Create columns for better layout
-    col1, col2 = st.columns(2)
-    
-    for i, feature in enumerate(features):
-        dist = distributions[feature['key']]
-        total = dist['total']
-        
-        if total == 0:
-            continue
-            
-        # Alternate between columns
-        current_col = col1 if i % 2 == 0 else col2
-        
-        with current_col:
-            st.markdown(f"""
-            <div style='background: rgba(0,0,0,0.3); border-radius: 10px; padding: 15px; margin-bottom: 15px;'>
-                <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;'>
-                    <h5 style='color: white; margin: 0;'>{feature['label']}</h5>
-                    <span style='color: rgba(255,255,255,0.7); font-size: 0.9em;'>{total} tracks</span>
-                </div>
-            """, unsafe_allow_html=True)
-            
-            # Progress bar for distribution
-            low_pct = (dist['low'] / total * 100) if total > 0 else 0
-            med_pct = (dist['medium'] / total * 100) if total > 0 else 0  
-            high_pct = (dist['high'] / total * 100) if total > 0 else 0
-            
-            st.markdown(f"""
-                <div style='background: #374151; border-radius: 10px; height: 25px; overflow: hidden; margin-bottom: 10px;'>
-                    <div style='height: 100%; display: flex;'>
-                        <div style='background: #3B82F6; width: {low_pct}%; transition: all 0.3s;'></div>
-                        <div style='background: #EAB308; width: {med_pct}%; transition: all 0.3s;'></div>
-                        <div style='background: {feature["color"]}; width: {high_pct}%; transition: all 0.3s;'></div>
-                    </div>
-                </div>
-                
-                <div style='display: flex; justify-content: space-between; font-size: 0.8em; color: rgba(255,255,255,0.7);'>
-                    <span>🔵 {feature['categories'][0]}: {dist['low']}</span>
-                    <span>🟡 {feature['categories'][1]}: {dist['medium']}</span>
-                    <span style='color: {feature["color"]};'>⚫ {feature['categories'][2]}: {dist['high']}</span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    # Summary stats
-    if music_data:
-        st.markdown(f"""
-        <div style='background: rgba(0,0,0,0.4); border-radius: 10px; padding: 15px; margin-top: 20px;'>
-            <h5 style='color: white; margin-bottom: 15px;'>📈 Quick Insights</h5>
-            <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 15px; text-align: center;'>
-                <div>
-                    <div style='color: #10B981; font-size: 1.5em; font-weight: bold;'>{len(music_data)}</div>
-                    <div style='color: rgba(255,255,255,0.7); font-size: 0.8em;'>Total Tracks</div>
-                </div>
-                <div>
-                    <div style='color: #3B82F6; font-size: 1.5em; font-weight: bold;'>{mood_params.get("valence", 0):.0%}</div>
-                    <div style='color: rgba(255,255,255,0.7); font-size: 0.8em;'>Target Happiness</div>
-                </div>
-                <div>
-                    <div style='color: #EF4444; font-size: 1.5em; font-weight: bold;'>{mood_params.get("energy", 0):.0%}</div>
-                    <div style='color: rgba(255,255,255,0.7); font-size: 0.8em;'>Target Energy</div>
-                </div>
-                <div>
-                    <div style='color: #8B5CF6; font-size: 1.5em; font-weight: bold;'>{mood_params.get("danceability", 0):.0%}</div>
-                    <div style='color: rgba(255,255,255,0.7); font-size: 0.8em;'>Target Danceability</div>
-                </div>
-            </div>
-        </div>
-        </div>
-    """, unsafe_allow_html=True)
-
 
 def render_playlist_details_page():
     """Render the playlist creation page."""
@@ -1104,6 +906,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
-    
-    
